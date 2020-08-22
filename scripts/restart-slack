@@ -1,0 +1,9 @@
+#!/bin/bash
+
+ps aux | grep slack | gawk '{ print $2 }' | head -n -2 | xargs kill
+
+if [ ! -d ~/log ]; then
+    mkdir ~/log
+fi
+
+slack >> ~/log/slack.txt &

@@ -1,0 +1,45 @@
+#!/usr/bin/python2.7
+# Date 2/18/2018
+# Author: Brandon N. Arnold
+# Purpose: Organize all files in the provided directory by first character of each filename into alphabetized subdirectories.
+# Usage: alphadir.py <path>
+
+import os
+import sys
+
+if 2 > len(sys.argv):
+  print("\nUsage: alphadir.py <path>\n")
+  exit(1)
+
+path = sys.argv[1]
+
+if not os.path.isdir(path):
+  print("\n'" + path + "' must be a directory.\n")
+  exit(1)
+
+dirWalks = [x for x in os.walk(path)]
+
+# if 1 < len(dirWalks):
+#   print("\n'" + path + "' must contain only files, no subdirectories.\n")
+#   exit(1)
+
+# Input has been sanitized; categorize all files in the provided
+#  directory into subdirectories of the same first char
+files = dirWalks[0][2]
+pathSet = {os.path.join(path, f[0].upper()) for f in files}
+
+# if path doesn't exist, create it
+def mkdirIfNew(newPath):
+  if not os.path.isdir(newPath):
+    os.mkdir(newPath)
+map(mkdirIfNew, pathSet)
+
+# move all files to path
+def categorizeFileByFirstChar(filename):
+  srcFilePath = os.path.join(path, filename)
+  destDirPath = os.path.join(path, filename[0].upper())
+  destFilePath = os.path.join(destDirPath, filename)
+  print("Moving '" + srcFilePath + "' to '" + destFilePath + "'...")
+  os.rename(srcFilePath, destFilePath)
+map(categorizeFileByFirstChar, files)
+  

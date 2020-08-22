@@ -1,0 +1,50 @@
+#!/usr/bin/python2.7
+########################################################################
+# set-dir-timestamps
+########################################################################
+# Parses the filenames of all files in the provided
+#  directory for a "YYYY-MMDD_" prefix and sets respective
+#  created date and modified date values to the corresponding
+#  parsed year/month/day
+########################################################################
+# usage: set-dir-timestamps [DIRECTORY]
+########################################################################
+import os
+import re
+import sys
+import time
+
+def main():
+  try:
+    setDirTimestamps()
+  except:
+    print("Usage: set-dir-timestamps [DIRECTORY]")
+    print("Error:", sys.exc_info()[1])
+    sys.exit()
+
+def setDirTimestamps():
+  directory = sys.argv[1]
+  files = os.listdir(directory)
+  for f in files:
+    # capture the "YYYY-MMDD_" portion (without the underscore) of filename (if it exists)
+    time_string = re.search('^[^_]*', f)
+    if time_string:
+      # capture the "YYYY" portion of the time string
+      year = re.search('^\d{4}', time_string.group(0))
+      if year:
+        mtime_tuple = None
+        # capture the month ("MM") portion, or both the month and the day ("MMDD") portion, of the filename (if exists)
+        monthday = re.search('-(\d{2})(\d*)', time_string.group(0))
+        if monthday:
+          if monthday.group(2): # does the "DD" (day of month) portion exist?
+            mtime_tuple = (int(year.group(0)), int(monthday.group(1)), int(monthday.group(2)), 0, 0, 0, 0, 0, 0)
+          else:
+            mtime_tuple = (int(year.group(0)), int(monthday.group(1)), 1, 0, 0, 0, 0, 0, 0)
+        else:
+          mtime_tuple = (int(year.group(0)), 1, 1, 0, 0, 0, 0, 0, 0)
+        if mtime_tuple:
+          mtime = time.mktime(mtime_tuple)
+          full_path = os.path.join(directory, f)
+          os.utime(full_path, (mtime, mtime))
+        
+main()

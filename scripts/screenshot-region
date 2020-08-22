@@ -1,0 +1,5 @@
+#!/bin/bash
+
+today=`date '+%Y-%m-%d%H:%M:%S'`;
+filename="/home/brandon/Downloads/Screenshot$today.png"
+import $filename;

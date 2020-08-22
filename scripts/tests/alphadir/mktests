@@ -1,0 +1,35 @@
+#!/usr/bin/python2.7
+# Date: 2/18/2018
+# Author: Brandon N. Arnold
+# Purpose: Create a list of test files in provided directory for `alphadir.py`
+# Usage: mktests.py <path>
+
+import os
+import sys
+import string
+import random
+
+if 2 > len(sys.argv):
+  print("\nUsage: mktests.py <path>\n")
+  exit(1)
+
+path = sys.argv[1]
+
+if not os.path.isdir(path):
+  print("\n'" + path + "' is not a valid directory.\n")
+  exit(1)
+
+samplePath = os.path.join(path, 'alphadir.sample')
+
+if os.path.exists(samplePath):
+  print("\n'" + samplePath + "' already exists.\n")
+  exit(1)
+
+# Input has been sanitized; create 100 files with random alphanumeric filenames
+os.mkdir(samplePath)
+def getRandomFilename(ignoreInput):
+  return ''.join(random.choice(string.ascii_uppercase + string.digits) for x in range(10))
+randomFilenames = map(getRandomFilename, range(100))
+def createFile(filename):
+  open(os.path.join(samplePath, filename), 'a').close()
+map(createFile, randomFilenames)

@@ -1,0 +1,3 @@
+#!/bin/bash
+
+scrot ~/Downloads/Screenshot%Y-%m-%d%H:%M:%S.png

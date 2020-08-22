@@ -1,0 +1,3 @@
+#!/bin/bash
+unset DOCKER_HOST
+unset DOCKER_TLS_VERIFY

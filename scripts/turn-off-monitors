@@ -1,0 +1,2 @@
+#!/bin/bash
+xset dpms force off; read ans; xset dpms force on
