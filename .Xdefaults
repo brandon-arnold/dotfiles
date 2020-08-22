@@ -1,0 +1,15 @@
+URxvt.termName:         rxvt
+URxvt.reverseVideo:     True
+URxvt.urlLauncher:      google-chrome-stable
+URxvt.scrollstyle:      plain
+URxvt.font: xft:Hack:regular:pixelsize=40:antialias=true:hinting=true
+URxvt.boldFont: xft:Hack:bold:pixelsize=40:antialias=true:hinting=true
+URxvt.italicFont: xft:Hack:italic:pixelsize=40:antialias=true:hinting=true
+URxvt.boldItalicFont: xft:Hack:bold:italic:pixelsize=40:antialias=true:hinting=true
+! URxvt.font: xft:Noto Sans Mono:regular:pixelsize=14:antialias=true:hinting=true
+! URxvt.boldFont: xft:Noto Sans Mono:bold:pixelsize=14:antialias=true:hinting=true
+! URxvt.italicFont: xft:Noto Sans Mono:italic:pixelsize=14:antialias=true:hinting=true
+! URxvt.boldItalicFont: xft:Noto Sans Mono:bold:italic:pixelsize=14:antialias=true:hinting=true
+URxvt.keysym.Shift-Control-V: perl:clipboard:paste
+URxvt.iso14755: False
+URxvt.perl-ext-common: default,clipboard
