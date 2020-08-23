@@ -26,11 +26,17 @@ font pango:monospace 8
 # X core fonts rendering does not support right-to-left and this being a bitmap
 # font, it doesn’t scale on retina/hidpi displays.
 
+# disable title bar completely
+new_window pixel
+
+# disable borders
+hide_edge_borders both
+
 # Use Mouse+$mod to drag floating windows to their wanted position
 floating_modifier $mod
 
 # start a terminal
-bindsym $mod+Return exec i3-sensible-terminal
+bindsym $mod+Return exec termite
 
 # kill focused window
 bindsym $mod+Shift+q kill
@@ -166,5 +172,30 @@ bindsym $mod+r mode "resize"
 # Start i3bar to display a workspace bar (plus the system information i3status
 # finds out, if available)
 bar {
-        status_command i3status
+    status_command while "/home/brandon/scripts/sway-bar"; do sleep 1; done
 }
+# Assign Emacs to Ctrl + Alt + 'e'
+bindsym Control+Mod1+e exec --no-startup-id edit
+
+# Dropbox/Bluetooth/Audio/WiFi in bar
+# exec --no-startup-id dropbox start
+# exec --no-startup-id blueman-applet
+# exec --no-startup-id pasystray
+# exec --no-startup-id nm-applet
+
+# Dell keyboard function bindings
+bindsym XF86AudioRaiseVolume exec "amixer -q -c 1 sset Master,0 10+ unmute"
+bindsym XF86AudioLowerVolume exec "amixer -q -c 1 sset Master,0 10- unmute"
+bindsym XF86AudioMute exec "amixer -q -c 1 sset Master,0 toggle"
+# bindsym XF86AudioMicMute exec --no-startup-id pactl set-source-mute 1 toggle
+# bindsym Num_Lock
+# bindsym Scroll_Lock
+# bindsym XF86Search
+# for these to work, the acpilight version of xbacklight must be used--see github for instructions on setting up
+bindsym XF86MonBrightnessDown exec xbacklight -dec 5
+bindsym XF86MonBrightnessUp exec xbacklight -inc 5
+
+# Screenshots (scrot) assigned to Print Screen key, saved to ~/Downloads/...
+bindcode --release 107 exec --no-startup-id "~/scripts/screenshot-region";
+
+# Assign i3lock to Control + Alt + Delete
