@@ -173,6 +173,9 @@ bindsym $mod+r mode "resize"
 # finds out, if available)
 bar {
     status_command while "/home/brandon/scripts/sway-bar"; do sleep 1; done
+    mode hide
+    hidden_state hide
+    modifier $mod
 }
 # Assign Emacs to Ctrl + Alt + 'e'
 bindsym Control+Mod1+e exec --no-startup-id edit
