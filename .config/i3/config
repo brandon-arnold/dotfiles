@@ -181,10 +181,9 @@ bar {
 bindsym Control+Mod1+e exec --no-startup-id edit
 
 # Dropbox/Bluetooth/Audio/WiFi in bar
-# exec --no-startup-id dropbox start
-# exec --no-startup-id blueman-applet
+exec --no-startup-id blueman-applet
 # exec --no-startup-id pasystray
-# exec --no-startup-id nm-applet
+exec --no-startup-id nm-applet
 
 # Dell keyboard function bindings
 bindsym XF86AudioRaiseVolume exec "amixer -q -c 1 sset Master,0 10+ unmute"
@@ -201,4 +200,5 @@ bindsym XF86MonBrightnessUp exec light -A 1
 # Screenshots (scrot) assigned to Print Screen key, saved to ~/Downloads/...
 bindcode --release 107 exec --no-startup-id "~/scripts/screenshot-region";
 
+bindsym $mod+Shift+f exec qtfm
 # Assign i3lock to Control + Alt + Delete
