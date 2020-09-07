@@ -1,0 +1,31 @@
+#!/usr/bin/python
+
+# START
+
+# Basically following these steps, but in Python:
+#   - https://docs.aws.amazon.com/vpn/latest/clientvpn-admin/cvpn-working-endpoints.html#cvpn-working-endpoint-create
+#
+# Using this main area of Python's Ec2.Client:
+#   - https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/ec2.html#EC2.Client
+
+# get bna client vpn endpoint
+#   get client vpn endpoints
+#   filter to the one that is the bna client endpoint
+#   if that is null
+#     create_client_vpn_endpoint
+#     connect the vpn endpoint to the vpc/security group
+
+# export_client_vpn_client_configuration
+
+# connect, with openvpn-api
+# https://pypi.org/project/openvpn-api/
+
+
+
+# STOP
+
+# Disconnect openvpn-api
+# Query Aws.Client for client connections
+# If there are no client connections
+#   - Delete the client endpoint
+

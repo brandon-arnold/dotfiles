@@ -1,7 +1,4 @@
 #!/usr/bin/python2.7
-# Date 2/18/2018
-# Author: Brandon N. Arnold
-# Purpose: Organize all files in the provided directory by first character of each filename into alphabetized subdirectories.
 # Usage: alphadir.py <path>
 
 import os
