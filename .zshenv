@@ -11,3 +11,5 @@ export LESSOPEN='|~/.lessfilter %s'
 export GDK_SCALE=3
 export GDK_DPI_SCALE=0.75
 export QT_AUTO_SCREEN_SCALE_FACTOR=1
+
+export TERM=xterm-256color
