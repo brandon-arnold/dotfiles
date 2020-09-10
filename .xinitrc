@@ -6,6 +6,8 @@ xset dpms 600 600 600
 
 xrandr --setprovideroutputsource modesetting NVIDIA-0
 xrandr --auto
+xrandr --dpi 288
+# xrandr --dpi 264
 
 # start i3
 exec i3
