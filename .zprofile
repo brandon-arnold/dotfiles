@@ -41,7 +41,7 @@ slack() {
 }
 
 alias top="sudo htop"
-alias cat="bat"
+# alias cat="bat"
 alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules"
 alias ls="lsd"
 
