@@ -14,7 +14,9 @@ set $menu dmenu_path | dmenu | xargs swaymsg exec --
 ### Output configuration
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
-output * resolution 3840x2160 bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill scale 2
+# output * resolution 3840x2160 bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill scale 2
+output * resolution 3840x2160 bg /usr/share/backgrounds/gnome/Acrylic.jpg fill scale 2
+
 #
 # Example configuration:
 #
@@ -238,6 +240,11 @@ include /etc/sway/config.d/*
 input 1739:30383:DELL08AF:00_06CB:76AF_Touchpad {
     accel_profile adaptive
     pointer_accel 0.25
+    dwt enabled
+    natural_scroll enabled
+    tap_button_map lrm 
+    scroll_method two_finger
+    click_method clickfinger
 }
 
 # xwayland disable
