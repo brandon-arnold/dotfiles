@@ -1,0 +1,3 @@
+[[ -f ~/.bashrc ]] && . ~/.bashrc
+
+export PATH="/home/brandon/.ebcli-virtual-env/executables:$PATH"
