@@ -247,4 +247,5 @@ input 1739:30383:DELL08AF:00_06CB:76AF_Touchpad {
     click_method clickfinger
 }
 
+bindsym $mod+Shift+f exec qtfm
 # xwayland disable
