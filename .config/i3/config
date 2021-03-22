@@ -203,4 +203,7 @@ bindcode --release 107 exec --no-startup-id "~/scripts/screenshot-region";
 bindsym $mod+Shift+f exec qtfm
 # Assign i3lock to Control + Alt + Delete
 
-exec --no-startup-id nitrogen --set-auto /usr/share/backgrounds/i3/Acrylic.jpg --head=0 && nitrogen --set-auto /usr/share/backgrounds/i3/Acrylic.jpg --head=1 && nitrogen --set-auto /usr/share/backgrounds/i3/Acrylic.jpg --head=2
+# exec --no-startup-id nitrogen --set-auto /usr/share/backgrounds/i3/Acrylic.jpg --head=0 && nitrogen --set-auto /usr/share/backgrounds/i3/Acrylic.jpg --head=1 && nitrogen --set-auto /usr/share/backgrounds/i3/Acrylic.jpg --head=2
+exec --no-startup-id feh --bg-scale /usr/share/backgrounds/i3/Acrylic.jpg
+
+exec --no-startup-id picom --config ~/.config/picom.conf
