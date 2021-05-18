@@ -1,0 +1,4 @@
+#!/bin/bash
+
+ASSOCIATION_ID=$(aws ec2 describe-client-vpn-target-networks --client-vpn-endpoint-id cvpn-endpoint-0eef78bb10192185f | python3 -c "import sys, json; print(json.load(sys.stdin)['ClientVpnTargetNetworks'][0]['AssociationId'])")
+aws ec2 disassociate-client-vpn-target-network --client-vpn-endpoint-id cvpn-endpoint-0eef78bb10192185f --association-id $ASSOCIATION_ID

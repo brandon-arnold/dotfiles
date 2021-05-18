@@ -1,0 +1,3 @@
+#!/bin/bash
+
+sudo openvpn --config /home/brandon/.bna-private/my_expressvpn_usa_-_seattle_udp.ovpn --auth-user-pass ~/.bna-private/my_expressvpn_userpass.conf

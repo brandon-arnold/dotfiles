@@ -1,0 +1,4 @@
+#!/bin/bash
+
+cp /etc/X11/xorg.conf_nvidia /etc/X11/xorg.conf
+startx

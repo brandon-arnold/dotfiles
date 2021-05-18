@@ -1,0 +1,37 @@
+#!/usr/bin/python3
+
+import os
+import sys
+import csv
+import hashlib
+
+notabilityPath = "/home/brandon/Dropbox/Documents/Notability"
+indexCsvPath = "/home/brandon/Dropbox/Documents/notability_index.csv"
+
+# fill prevIndexMap with contents of indexCsvPath
+prevIndexMap = {}
+with open(indexCsvPath, newline='') as inFile:
+    reader = csv.reader(inFile)
+    next(reader)
+    for row in reader:
+        if len(row) > 2:
+            prevIndexMap[row[0]] = row[2]
+
+# fill curIndex with file info in notabilityPath
+curIndex = []
+for root, dirs, files in os.walk(notabilityPath):
+    relpath = os.path.relpath(root, notabilityPath)
+    for filename in files:
+        relfilename = relpath + '/' + filename
+        fileId = hashlib.md5(relfilename.encode('utf-8')).hexdigest()
+        lastReadDate = None
+        if fileId in prevIndexMap:
+            lastReadDate = prevIndexMap[fileId]
+        curIndex.append([fileId, relfilename, lastReadDate])
+
+# output syncedIndex to indexCsvPath
+with open(indexCsvPath, 'w', newline='') as outFile:
+    writer = csv.writer(outFile)
+    writer.writerow(['id', 'path', 'lastReadDate'])
+    for row in curIndex:
+        writer.writerow(row)

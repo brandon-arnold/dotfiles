@@ -1,0 +1,3 @@
+#!/bin/bash
+
+ssh -i ~/.bna-private/bna-dropbox-ssh-keypair.pem ubuntu@10.1.0.90

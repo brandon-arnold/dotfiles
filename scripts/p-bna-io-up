@@ -1,0 +1,18 @@
+#!/bin/bash
+
+aws ec2 associate-client-vpn-target-network --client-vpn-endpoint-id cvpn-endpoint-0eef78bb10192185f --subnet-id subnet-05598ef122e890b3a
+
+NETWORK_STATUS=$(aws ec2 describe-client-vpn-endpoints | python3 -c "import sys, json; print(json.load(sys.stdin)['ClientVpnEndpoints'][0]['Status']['Code'])")
+i=0
+while [ $i -lt 600 -a "$NETWORK_STATUS" != "available" ]
+do
+    echo "Network status: $NETWORK_STATUS ($i seconds)..."
+    NETWORK_STATUS=$(aws ec2 describe-client-vpn-endpoints | python3 -c "import sys, json; print(json.load(sys.stdin)['ClientVpnEndpoints'][0]['Status']['Code'])")
+    i=$((i+5))
+    sleep 5
+done
+
+if [ "$NETWORK_STATUS" == "available" ]
+then
+   sudo openvpn --config /home/brandon/.bna-private/bna-private-client-vpn-config.ovpn --cert /home/brandon/.bna-private/p.bna.io.crt --key /home/brandon/.bna-private/p.bna.io.key --route-metric 101
+fi
