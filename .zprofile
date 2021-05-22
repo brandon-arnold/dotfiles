@@ -43,7 +43,6 @@ slack() {
 alias top="sudo htop"
 # alias cat="bat"
 alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules"
-alias ls="lsd"
 
 # start x on login -- see .xinitrc for default window manager
 # if [ -z "$DISPLAY" ] && [ -n "$XDG_VTNR" ] && [ "$XDG_VTNR" -eq 1 ]; then
