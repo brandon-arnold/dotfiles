@@ -15,7 +15,7 @@ set $menu dmenu_path | dmenu | xargs swaymsg exec --
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
 # output * resolution 3840x2160 bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill scale 2
-output * resolution 3840x2160 bg /usr/share/backgrounds/gnome/Acrylic.jpg fill scale 2
+output * resolution 3840x2160 bg /home/brandon/Dropbox/Media\ and\ Snippets/Backgrounds/Acrylic.jpg fill scale 2
 
 #
 # Example configuration:
