@@ -1,5 +1,7 @@
 [[ $- != *i* ]] && return
 
+[ -s "~/.bna-private/secret-env" ] && \. "~/.bna-private/secret-env"
+
 alias ls='ls --color=auto'
 PS1='[\u@\h \W]\$ '
 

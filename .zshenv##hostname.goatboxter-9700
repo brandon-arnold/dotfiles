@@ -1,4 +1,4 @@
-[ -s "~/.secret-env" ] && \. "~/.secret-env"
+[ -s "~/.bna-private/secret-env" ] && \. "~/.bna-private/secret-env"
 
 export ALTERNATE_EDITOR=""
 export EDITOR="emacsclient -t"                  # $EDITOR should open in terminal
@@ -16,22 +16,3 @@ export TERM=xterm-256color
 
 export MAKEFLAGS="-j$(nproc)"
 
-# bna_index
-export BNA_DB_USER=bna
-export BNA_DB_PASS="$(cat ~/.bna-private/bna-core-postgres-password)"
-export BNA_DB_HOST=bna-core-postgres.ck9zthm3yjoj.us-west-2.rds.amazonaws.com
-export BNA_DB_PORT=5432
-export BNA_DB_NAME=bna_index
-export BNA_S3_DROPBOX_ARN=arn:aws:s3:::bna-dropbox
-export BNA_S3_DROPBOX_NOTABILITY_PREFIX=Documents/Notability
-
-# bacom 
-export YOUTUBE_SERVER_KEY="AIzaSyBxHqJkJoO_fr4wXL2x9IUAKoMoscNixfM"
-export TWITTER_CONSUMER_KEY="xkln8QbbS9Dm1QKdiXsOOZYMW"
-export TWITTER_CONSUMER_SECRET="txvMoAJ18BwE5hwd7xYX2V96vBgLBLTSN0cKeNVQAwBrKciwqU"
-export BACOM_CONTENT="/home/brandon/Dropbox"
-export BACOM_PUBLIC_DIR="/home/brandon/src/bacom/build/public"
-export BACOM_AWS_ACCESS_KEY_ID="AKIASPMT46N4657OCC5W"
-export BACOM_AWS_SECRET_ACCESS_KEY="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"
-
-export NPM_TOKEN="548d2b4c-881f-4d10-8abe-846638ac870f"
