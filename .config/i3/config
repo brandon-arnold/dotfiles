@@ -194,8 +194,8 @@ bindsym XF86AudioMute exec "amixer -q sset 'Master',0 toggle"
 # bindsym Scroll_Lock
 # bindsym XF86Search
 # for these to work, the acpilight version of xbacklight must be used--see github for instructions on setting up
-bindsym XF86MonBrightnessDown exec light -U 10
-bindsym XF86MonBrightnessUp exec light -A 10
+bindsym XF86MonBrightnessDown exec light -U 5
+bindsym XF86MonBrightnessUp exec light -A 5
 
 # Screenshots (scrot) assigned to Print Screen key, saved to ~/Downloads/...
 bindcode --release 107 exec --no-startup-id "~/scripts/screenshot-region";
