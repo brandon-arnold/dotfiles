@@ -54,3 +54,5 @@ alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules"
 #     XKB_DEFAULT_LAYOUT=us exec sway
 #     exit 0
 # fi
+
+export PATH=$PATH:$(npm get prefix)/bin
