@@ -17,3 +17,5 @@ export QT_AUTO_SCREEN_SCALE_FACTOR=1
 export TERM=xterm-256color
 
 export MAKEFLAGS="-j$(nproc)"
+
+export HISTCONTROL=ignorespace

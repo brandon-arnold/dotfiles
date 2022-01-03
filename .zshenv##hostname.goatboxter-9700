@@ -16,3 +16,4 @@ export TERM=xterm-256color
 
 export MAKEFLAGS="-j$(nproc)"
 
+export HISTCONTROL=ignorespace
