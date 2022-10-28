@@ -60,7 +60,7 @@ output * resolution 3840x2160 bg /home/brandon/Dropbox/Media\ and\ Snippets/Back
     default_border none
 
     # start a terminal
-    bindsym $mod+Return exec termite
+    bindsym $mod+Return exec alacritty
 
     # kill focused window
     bindsym $mod+Shift+q kill

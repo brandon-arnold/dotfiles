@@ -16,5 +16,5 @@ xinput set-prop "DELL098F:00 04F3:311C Touchpad" "libinput Accel Speed" 0.25
 xinput set-prop "DELL098F:00 04F3:311C Touchpad" "libinput Natural Scrolling Enabled" 1
 
 # start i3
-exec i3
+exec i3 
 
