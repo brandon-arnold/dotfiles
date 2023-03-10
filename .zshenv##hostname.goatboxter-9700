@@ -1,4 +1,4 @@
-[ -s "~/.bna-private/secret-env" ] && \. "~/.bna-private/secret-env"
+if [ -f ~/.bna-private/secret-env ]; then . ~/.bna-private/secret-env; fi
 
 export ALTERNATE_EDITOR=""
 export EDITOR="emacsclient -t"                  # $EDITOR should open in terminal

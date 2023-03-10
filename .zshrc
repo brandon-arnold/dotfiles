@@ -31,3 +31,5 @@ export NVM_DIR="$HOME/.nvm"
 if [ -f /usr/share/nvm/init-nvm.sh ]; then
     source /usr/share/nvm/init-nvm.sh
 fi
+
+setopt HIST_IGNORE_SPACE

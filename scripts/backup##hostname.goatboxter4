@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# Backs up the entire system, excluding some volatile directories.
+
+# -a                   archive mode is -rlptgoD (no -A,-X,-U,-N,-H)
+# -A                   preserve ACLs
+# -X                   preserve extended attributes
+# -l,--links           copy symlinks as symlinks
+# -v,--verbose         verbose
+# -e "...",--rsh="..." skips the y/N untrusted hosts message
+# --progress (and -v)  above gives useful logging history
+# --filter"-,p ..."    is a better way than --exclude to exclude directories
+#                      (see http://blog.mudflatsoftware.com/blog/2012/10/31/tricks-with-rsync-filter-rules/ )
+# --backup             make backups (see --suffix & --backup-dir)
+# --backup-dir="/extern/path/to/.rsync_bak_$(date +\%Y-\%m-\%d-\%H-\%M)"
+#                      make backups into hierarchy based in DIR
+# --delete             delete extraneous files from dest dirs
+
+rsync -aAXlv \
+      -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes" \
+      --progress \
+      --filter="-,p /dev/*" \
+      --filter="-,p /home/brandon/.cache/google-chrome/*" \
+      --filter="-,p /home/brandon/.config/google-chrome/*" \
+      --filter="-,p /home/brandon/.config/Slack/*" \
+      --filter="-,p /home/brandon/Dropbox/*" \
+      --filter="-,p /home/brandon/.dropbox/*" \
+      --filter="-,p /home/brandon/.cache/*" \
+      --filter="-,p /home/brandon/.local/*" \
+      --filter="-,p /home/brandon/VirtualBox\ VMs/*" \
+      --filter="-,p /home/brandon/temp/*" \
+      --filter="-,p /home/brandon/Projects/mg-aws-glacier/*.log" \
+      --filter="-,p /lost+found" \
+      --filter="-,p /media/*" \
+      --filter="-,p /mnt/*" \
+      --filter="-,p /proc/*" \
+      --filter="-,p /run/*" \
+      --filter="-,p /sys/*" \
+      --filter="-,p /tmp/*" \
+      --filter="-,p /var/cache/*" \
+      --filter="-,p /var/lib/*" \
+      --filter="-,p /var/tmp/*" \
+      --backup \
+      --backup-dir="/share/Brandon/PcBackup/goatboxter4/.rsync_bak_$(date +\%Y-\%m-\%d-\%H-\%M)" \
+      --delete \
+      --delete-excluded \
+      / brandon.arnold@192.168.1.201:/share/Brandon/PcBackup/goatboxter4/rsync

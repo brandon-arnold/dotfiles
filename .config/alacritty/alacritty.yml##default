@@ -1,7 +1,6 @@
 window:
   decorations: none
   opacity: 0.85
-  startup_mode: Fullscreen
 
 scrolling:
   history: 10000

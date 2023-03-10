@@ -1,6 +1,6 @@
 [[ $- != *i* ]] && return
 
-[ -s "~/.bna-private/secret-env" ] && \. "~/.bna-private/secret-env"
+if [ -f ~/.bna-private/secret-env ]; then . ~/.bna-private/secret-env; fi
 
 alias ls='ls --color=auto'
 PS1='[\u@\h \W]\$ '
