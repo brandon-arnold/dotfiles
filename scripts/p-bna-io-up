@@ -14,5 +14,5 @@ done
 
 if [ "$NETWORK_STATUS" == "available" ]
 then
-   sudo openvpn --config /home/brandon/.bna-private/bna-private-client-vpn-config.ovpn --cert /home/brandon/.bna-private/p.bna.io.crt --key /home/brandon/.bna-private/p.bna.io.key --route-metric 101
+   sudo openvpn --config /home/brandon/.bna-private/bna-private-client-vpn-config.ovpn --cert /home/brandon/.bna-private/goatboxter-9700.bna.io.crt --key /home/brandon/.bna-private/goatboxter-9700.bna.io.key --route-metric 101
 fi

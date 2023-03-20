@@ -2,7 +2,6 @@
 
 # Backs up the entire system, excluding some volatile directories.
 
-# Used to be -aAX
 # -a,--archive         archive mode is -rlptgoD (no -A,-X,-U,-N,-H)
 # -A,--acls            preserve ACLs
 # -X,--xattrs          preserve extended attributes
