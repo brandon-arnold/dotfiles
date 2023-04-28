@@ -25,22 +25,23 @@ rsync --archive \
       -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes" \
       --progress \
       --filter="-,p /dev/*" \
-      --filter="-,p /home/brandon/.cache/google-chrome/*" \
-      --filter="-,p /home/brandon/.config/google-chrome/*" \
-      --filter="-,p /home/brandon/.config/Slack/*" \
       --filter="-,p /home/brandon/.aws/*" \
-      --filter="-,p /home/brandon/.ssh/*" \
       --filter="-,p /home/brandon/.bna-private/*" \
-      --filter="-,p /home/brandon/Dropbox/*" \
-      --filter="-,p /home/brandon/.dropbox/*" \
       --filter="-,p /home/brandon/.cache/*" \
+      --filter="-,p /home/brandon/.cache/google-chrome/*" \
+      --filter="-,p /home/brandon/.config/Slack/*" \
+      --filter="-,p /home/brandon/.config/google-chrome/*" \
+      --filter="-,p /home/brandon/.dropbox/*" \
       --filter="-,p /home/brandon/.local/*" \
       --filter="-,p /home/brandon/.npm/*" \
+      --filter="-,p /home/brandon/.ssh/*" \
+      --filter="-,p /home/brandon/.wine/*" \
+      --filter="-,p /home/brandon/Dropbox/*" \
+      --filter="-,p /home/brandon/Projects/mt-aws-glacier/*.log" \
       --filter="-,p /home/brandon/VirtualBox\ VMs/*" \
+      --filter="-,p /home/brandon/vm/*" \
       --filter="-,p /home/brandon/build/*" \
       --filter="-,p /home/brandon/temp/*" \
-      --filter="-,p /home/brandon/.wine/*" \
-      --filter="-,p /home/brandon/Projects/mt-aws-glacier/*.log" \
       --filter="-,p /lost+found" \
       --filter="-,p /media/*" \
       --filter="-,p /mnt/*" \

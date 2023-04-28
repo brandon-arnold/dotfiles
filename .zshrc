@@ -11,6 +11,8 @@ antigen apply
 
 source $ZSH/oh-my-zsh.sh
 
+[[ $TERM == "tramp" ]] && unsetopt zle && PS1='$ ' && return
+
 # Preferred editor for local and remote sessions
 if [[ -n $SSH_CONNECTION ]]; then
     export EDITOR='emacs -nw'
