@@ -1,0 +1,12 @@
+#!/bin/bash
+
+if ! [[ -n "`docker context ls | awk '{print $1}' | grep truenas-knode`" ]]; then
+    echo "Docker context truenas-knode does not exist"
+    docker context create \
+           --docker host=ssh://brandon@truenas-knode.bant \
+           --description="truenas-knode" \
+           truenas-knode
+fi
+
+docker context use truenas-knode
+
