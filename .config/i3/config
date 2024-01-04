@@ -184,6 +184,7 @@ bindsym Control+Mod1+e exec --no-startup-id edit
 exec --no-startup-id blueman-applet
 # exec --no-startup-id pasystray
 exec --no-startup-id nm-applet
+exec --no-startup-id polychromatic-tray-applet
 
 # Dell keyboard function bindings
 bindsym XF86AudioRaiseVolume exec "amixer -q sset 'Master',0 5000+ unmute"
