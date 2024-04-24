@@ -1,0 +1,6 @@
+#!/usr/bin/bash
+while inotifywait -r -e modify,create,delete /home/brandon/opt/editor_build2/save.json
+
+do
+rsync -avz /home/brandon/opt/editor_build2/save.json /home/brandon/opt/editor_build2/save.json_bak_$(date +\%Y-\%m-\%d-\%H-\%M-\%S)
+done

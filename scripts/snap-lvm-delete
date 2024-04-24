@@ -1,0 +1,14 @@
+#!/bin/bash
+# VOLGROP= name of the volume group
+# SNAPVOL= name of the snapshot to delete
+
+# ----------------------------------------------------------------------------------------------
+
+# remove the snapshot
+if ! lvremove -f /dev/${VOLGROP}/${SNAPVOL} >/dev/null 2>&1
+then
+      echo "cannot remove the lvm snapshot"
+      exit 1
+fi
+
+exit 0

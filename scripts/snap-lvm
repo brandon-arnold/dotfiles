@@ -1,0 +1,33 @@
+#!/bin/bash
+# VOLGROP= name of the volume group
+# ORIGVOL= name of the logical volume to backup
+# SNAPVOL= name of the snapshot to create
+# SNAPSIZ= space to allocate for the snapshot in the volume group
+
+# ----------------------------------------------------------------------------------------------
+
+PATH="${PATH}:/usr/sbin:/sbin:/usr/bin:/bin"
+TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
+
+# only run as root
+if [ "$(id -u)" != '0' ]
+then
+        echo "this script has to be run as root"
+        exit 1
+fi
+
+# check that the snapshot does not already exist
+if [ -e "/dev/${VOLGROP}/${SNAPVOL}" ]
+then
+        echo "the lvm snapshot already exists, please destroy it by hand first"
+        exit 1
+fi
+
+# create the lvm snapshot
+if ! lvcreate -L${SNAPSIZ} -s -n ${SNAPVOL} /dev/${VOLGROP}/${ORIGVOL} >/dev/null 2>&1
+then
+        echo "creation of the lvm snapshot failed"
+        exit 1
+fi
+
+exit 0
