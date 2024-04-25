@@ -3,7 +3,6 @@
 # ORIGVOL= name of the logical volume to backup
 # SNAPVOL= name of the snapshot to create
 # SNAPSIZ= space to allocate for the snapshot in the volume group
-
 # ----------------------------------------------------------------------------------------------
 
 PATH="${PATH}:/usr/sbin:/sbin:/usr/bin:/bin"

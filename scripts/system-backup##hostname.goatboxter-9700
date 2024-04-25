@@ -1,0 +1,73 @@
+#!/bin/bash
+
+RES=0
+
+echo "arch-root start: "$(date)
+
+##
+## /dev/9700-vg/arch-root
+##
+
+if ! VOLGROP='9700-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+then
+    exit 1
+fi
+
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' BACKDIR='/mnt/nas-brandon/PcBackup/goatboxter-9700/' BACKNAM='goatboxter9700-arch-root' /home/brandon/scripts/snap-lvm-fsarchive
+then
+    echo "fsarchive exited with a fail status on arch-root"
+    RES=1
+fi
+
+if ! VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
+then
+    exit 1
+fi
+
+echo "arch-home start: "$(date)
+
+##
+## /dev/9700-vg/arch-home
+##
+
+if ! VOLGROP='9700-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+then
+    exit 1
+fi
+
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' BACKDIR='/mnt/nas-brandon/PcBackup/goatboxter-9700/' BACKNAM='goatboxter9700-arch-home' /home/brandon/scripts/snap-lvm-fsarchive
+then
+    echo "fsarchive exited with a fail status on arch-home"
+    RES=1
+fi
+
+if ! VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
+then
+    exit 1
+fi
+
+echo "arch-home start: "$(date)
+
+##
+## /dev/9700-vg/arch-vm
+##
+
+if ! VOLGROP='9700-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+then
+    exit 1
+fi
+
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' BACKDIR='/mnt/nas-brandon/PcBackup/goatboxter-9700/' BACKNAM='goatboxter9700-arch-vm' /home/brandon/scripts/snap-lvm-fsarchive
+then
+    echo "fsarchive exited with a fail status on arch-vm"
+    RES=1
+fi
+
+if ! VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete
+then
+    exit 1
+fi
+
+echo "finished: "$(date)
+
+exit ${RES}
