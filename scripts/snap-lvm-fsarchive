@@ -8,9 +8,9 @@
 PATH="${PATH}:/usr/sbin:/sbin:/usr/bin:/bin"
 TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
 
-if fsarchiver savefs ${FSAOPTS} ${BACKDIR}/${BACKNAM}-${TIMESTAMP}.fsa /dev/${VOLGROP}/${SNAPVOL}
+if fsarchiver savefs ${FSAOPTS} ${BACKDIR}/${TIMESTAMP}-${BACKNAM}.fsa  --exclude "/home/brandon/.cache" --exclude "/home/brandon/.local" /dev/${VOLGROP}/${SNAPVOL}
 then
-    # md5sum ${BACKDIR}/${BACKNAM}-${TIMESTAMP}.fsa > ${BACKDIR}/${BACKNAM}-${TIMESTAMP}.md5
+    # md5sum ${BACKDIR}/${TIMESTAMP}-${BACKNAM}.fsa > ${BACKDIR}/${TIMESTAMP}-${BACKNAM}.md5
     RES=0
 else
     echo "fsarchiver failed"

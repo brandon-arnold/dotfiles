@@ -41,7 +41,8 @@ rsync --archive \
       --filter="-,p /home/brandon/VirtualBox\ VMs/*" \
       --filter="-,p /home/brandon/vm/*" \
       --filter="-,p /home/brandon/build/*" \
-      --filter="-,p /home/brandon/temp/*" \
+      --filter="-,p /home/brandon/tmp/*" \
+      --filter="-,p /home/brandon/Downloads/*" \
       --filter="-,p /lost+found" \
       --filter="-,p /media/*" \
       --filter="-,p /mnt/*" \

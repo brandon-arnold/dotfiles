@@ -1,6 +1,39 @@
 #!/bin/bash
 
+# TODO
+# - Set up a systemd service and timer, but not until creating a "time since last backup" check
+# 1. date +%s > /mnt/nas-brandon/PcBackup/goatboxter-9700/last-system-backup-time.txt
+# 2. CURDATE=$(date +%s)
+# 3. PREVDATE=$(cat /mnt/nas-brandon/PcBackup/goatboxter-9700/last-system-backup-time.txt)
+# 4. DATEDIFF="$((PREVDATE-CURDATE))"
+# 5. if DATEDIFF < seconds_in_week echo "not time yet" end
+
+TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
 RES=0
+
+echo "boot start: "$(date)
+
+##
+## /boot
+##
+
+if ! umount /boot
+then
+    echo "unable to unmount /boot"
+    exit 1
+fi
+
+if ! fsarchiver savefs -Z8 -j8 /mnt/nas-brandon/PcBackup/goatboxter-9700/${TIMESTAMP}-goatboxter9700-boot.fsa /dev/nvme0n1p1
+then
+    echo "fsarchive exited with a fail status on boot"
+    RES=1
+fi
+
+if ! mount /boot
+then
+    echo "unable to mount /boot"
+    exit 1
+fi
 
 echo "arch-root start: "$(date)
 
@@ -10,6 +43,7 @@ echo "arch-root start: "$(date)
 
 if ! VOLGROP='9700-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
+    echo "unable to snap arch-root"
     exit 1
 fi
 
@@ -21,6 +55,7 @@ fi
 
 if ! VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
 then
+    echo "unable to delete snap arch-root-backup-snap"
     exit 1
 fi
 
@@ -32,6 +67,7 @@ echo "arch-home start: "$(date)
 
 if ! VOLGROP='9700-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
+    echo "unable to snap arch-home"
     exit 1
 fi
 
@@ -43,10 +79,11 @@ fi
 
 if ! VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
 then
+    echo "unable to delete snap arch-root-home-snap"
     exit 1
 fi
 
-echo "arch-home start: "$(date)
+echo "arch-vg start: "$(date)
 
 ##
 ## /dev/9700-vg/arch-vm
@@ -54,6 +91,7 @@ echo "arch-home start: "$(date)
 
 if ! VOLGROP='9700-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
+    echo "unable to snap arch-vm"
     exit 1
 fi
 
@@ -65,6 +103,7 @@ fi
 
 if ! VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete
 then
+    echo "unable to delete snap arch-vm-backup-snap"
     exit 1
 fi
 
