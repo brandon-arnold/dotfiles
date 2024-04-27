@@ -1,21 +1,36 @@
 #!/bin/bash
 
-# TODO
-# - Set up a systemd service and timer, but not until creating a "time since last backup" check
-# 1. date +%s > /mnt/nas-brandon/PcBackup/goatboxter-9700/last-system-backup-time.txt
-# 2. CURDATE=$(date +%s)
-# 3. PREVDATE=$(cat /mnt/nas-brandon/PcBackup/goatboxter-9700/last-system-backup-time.txt)
-# 4. DATEDIFF="$((PREVDATE-CURDATE))"
-# 5. if DATEDIFF < seconds_in_week echo "not time yet" end
+CURDATE=$(date +%s)
+PREVDATE=$(cat /mnt/nas-brandon/PcBackup/goatboxter-9700/backuptime.txt)
+DATEDIFF="$((CURDATE-PREVDATE))"
+SECONDS_TO_WAIT=518400 # number of seconds in 6 days
 
 TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
 RES=0
 
-echo "boot start: "$(date)
+echo "system-backup on "$(date)
 
+if [[ $SECONDS_TO_WAIT -gt $DATEDIFF ]]
+then
+    echo $DATEDIFF" seconds is less than 6 days since last backup; canceling"
+    exit 0
+fi
+
+##
+##
+##
+##
+##
 ##
 ## /boot
 ##
+##
+##
+##
+##
+##
+
+echo "backing up /boot: "$(date)
 
 if ! umount /boot
 then
@@ -25,7 +40,7 @@ fi
 
 if ! fsarchiver savefs -Z8 -j8 /mnt/nas-brandon/PcBackup/goatboxter-9700/${TIMESTAMP}-goatboxter9700-boot.fsa /dev/nvme0n1p1
 then
-    echo "fsarchive exited with a fail status on boot"
+    echo "fsarchive exited with a fail status on /boot"
     RES=1
 fi
 
@@ -35,11 +50,22 @@ then
     exit 1
 fi
 
-echo "arch-root start: "$(date)
 
+##
+##
+##
+##
+##
 ##
 ## /dev/9700-vg/arch-root
 ##
+##
+##
+##
+##
+##
+
+echo "backing up arch-root: "$(date)
 
 if ! VOLGROP='9700-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
@@ -59,11 +85,22 @@ then
     exit 1
 fi
 
-echo "arch-home start: "$(date)
 
+##
+##
+##
+##
+##
 ##
 ## /dev/9700-vg/arch-home
 ##
+##
+##
+##
+##
+##
+
+echo "backing up arch-home: "$(date)
 
 if ! VOLGROP='9700-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
@@ -83,11 +120,21 @@ then
     exit 1
 fi
 
-echo "arch-vg start: "$(date)
-
+##
+##
+##
+##
+##
 ##
 ## /dev/9700-vg/arch-vm
 ##
+##
+##
+##
+##
+##
+
+echo "backing up arch-vm: "$(date)
 
 if ! VOLGROP='9700-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
@@ -106,6 +153,8 @@ then
     echo "unable to delete snap arch-vm-backup-snap"
     exit 1
 fi
+
+date +%s > /mnt/nas-brandon/PcBackup/goatboxter-9700/backuptime.txt
 
 echo "finished: "$(date)
 
