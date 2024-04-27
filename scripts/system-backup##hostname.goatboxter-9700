@@ -6,6 +6,8 @@ DATEDIFF="$((CURDATE-PREVDATE))"
 SECONDS_TO_WAIT=518400 # number of seconds in 6 days
 
 TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
+BACKDIR="/mnt/nas-brandon/PcBackup/goatboxter-9700/${TIMESTAMP}"
+
 RES=0
 
 echo "system-backup on "$(date)
@@ -15,6 +17,10 @@ then
     echo $DATEDIFF" seconds is less than 6 days since last backup; canceling"
     exit 0
 fi
+
+mkdir ${BACKDIR}
+sfdisk -d /dev/nvme0n1 > "${BACKDIR}/nvme0n1-sfdisk-partition-table.txt"
+cp /etc/lvm/backup/9700-vg "${BACKDIR}/etc-lvm-backup-9700-vg"
 
 ##
 ##
@@ -38,7 +44,7 @@ then
     exit 1
 fi
 
-if ! fsarchiver savefs -Z8 -j8 /mnt/nas-brandon/PcBackup/goatboxter-9700/${TIMESTAMP}-goatboxter9700-boot.fsa /dev/nvme0n1p1
+if ! fsarchiver savefs -Z8 -j8 "${BACKDIR}/boot.fsa" /dev/nvme0n1p1
 then
     echo "fsarchive exited with a fail status on /boot"
     RES=1
@@ -73,7 +79,7 @@ then
     exit 1
 fi
 
-if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' BACKDIR='/mnt/nas-brandon/PcBackup/goatboxter-9700/' BACKNAM='goatboxter9700-arch-root' /home/brandon/scripts/snap-lvm-fsarchive
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-root' /home/brandon/scripts/snap-lvm-fsarchive
 then
     echo "fsarchive exited with a fail status on arch-root"
     RES=1
@@ -108,7 +114,7 @@ then
     exit 1
 fi
 
-if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' BACKDIR='/mnt/nas-brandon/PcBackup/goatboxter-9700/' BACKNAM='goatboxter9700-arch-home' /home/brandon/scripts/snap-lvm-fsarchive
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-home' /home/brandon/scripts/snap-lvm-fsarchive
 then
     echo "fsarchive exited with a fail status on arch-home"
     RES=1
@@ -142,7 +148,7 @@ then
     exit 1
 fi
 
-if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' BACKDIR='/mnt/nas-brandon/PcBackup/goatboxter-9700/' BACKNAM='goatboxter9700-arch-vm' /home/brandon/scripts/snap-lvm-fsarchive
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-vm' /home/brandon/scripts/snap-lvm-fsarchive
 then
     echo "fsarchive exited with a fail status on arch-vm"
     RES=1
