@@ -1,47 +1,61 @@
 #!/bin/bash
 
-CURDATE=$(date +%s)
-PREVDATE=$(cat /mnt/nas-brandon/PcBackup/goatboxter-9700/backuptime.txt)
-DATEDIFF="$((CURDATE-PREVDATE))"
-SECONDS_TO_WAIT=518400 # number of seconds in 6 days
+#####################################################
+##
+## system-backup
+## 
+## Takes an image backup of various partitions.
+##
+#####################################################
 
-TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
-BACKDIR="/mnt/nas-brandon/PcBackup/goatboxter-9700/${TIMESTAMP}"
+BACKUP_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-9700/"
+SECONDS_BETWEEN_BACKUPS=518400 # 6 days
 
-RES=0
+#####################################################
+##
+## Check if enough time has elapsed since last backup
+##
+#####################################################
 
 echo "system-backup on "$(date)
 
-if [[ $SECONDS_TO_WAIT -gt $DATEDIFF ]]
+if ! /home/brandon/scripts/touch-date-check \
+     -f "${BACKUP_ROOT_PATH}backuptime.txt" \
+     -s "${SECONDS_BETWEEN_BACKUPS}"
 then
-    echo $DATEDIFF" seconds is less than 6 days since last backup; canceling"
+    echo "Canceling, as enough time has not elapsed since last backup."
     exit 0
 fi
+
+#####################################################
+##
+## Back up partition table and LVM volume group definitions
+##
+#####################################################
+
+TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
+BACKDIR="${BACKUP_ROOT_PATH}${TIMESTAMP}"
+RES=0
 
 mkdir ${BACKDIR}
 sfdisk -d /dev/nvme0n1 > "${BACKDIR}/nvme0n1-sfdisk-partition-table.txt"
 cp /etc/lvm/backup/9700-vg "${BACKDIR}/etc-lvm-backup-9700-vg"
 
+#####################################################
 ##
+## Back up /boot
 ##
-##
-##
-##
-##
-## /boot
-##
-##
-##
-##
-##
-##
+#####################################################
 
 echo "backing up /boot: "$(date)
 
-if ! umount /boot
-then
-    echo "unable to unmount /boot"
-    exit 1
+if mountpoint -q /boot; then
+    MOUNTED_BOOT=1
+    if ! umount /boot
+    then
+        echo "unable to unmount /boot"
+        exit 1
+    fi
 fi
 
 if ! fsarchiver savefs -Z8 -j8 "${BACKDIR}/boot.fsa" /dev/nvme0n1p1
@@ -50,26 +64,18 @@ then
     RES=1
 fi
 
-if ! mount /boot
-then
-    echo "unable to mount /boot"
-    exit 1
+if [ "$MOUNTED_BOOT" -eq "1" ]; then
+    if ! mount /boot; then
+        echo "unable to mount /boot"
+        exit 1
+    fi
 fi
 
-
+#####################################################
 ##
+## Back up /dev/9700-vg/arch-root
 ##
-##
-##
-##
-##
-## /dev/9700-vg/arch-root
-##
-##
-##
-##
-##
-##
+#####################################################
 
 echo "backing up arch-root: "$(date)
 
@@ -91,20 +97,11 @@ then
     exit 1
 fi
 
-
+#####################################################
 ##
+## Back up /dev/9700-vg/arch-home
 ##
-##
-##
-##
-##
-## /dev/9700-vg/arch-home
-##
-##
-##
-##
-##
-##
+#####################################################
 
 echo "backing up arch-home: "$(date)
 
@@ -126,19 +123,11 @@ then
     exit 1
 fi
 
+#####################################################
 ##
+## Back up /dev/9700-vg/arch-vm
 ##
-##
-##
-##
-##
-## /dev/9700-vg/arch-vm
-##
-##
-##
-##
-##
-##
+#####################################################
 
 echo "backing up arch-vm: "$(date)
 
@@ -160,7 +149,7 @@ then
     exit 1
 fi
 
-date +%s > /mnt/nas-brandon/PcBackup/goatboxter-9700/backuptime.txt
+date +%s > "${BACKUP_ROOT_PATH}backuptime.txt"
 
 echo "finished: "$(date)
 
