@@ -1,0 +1,156 @@
+#!/bin/bash
+
+#####################################################
+##
+## system-backup
+## 
+## Takes an image backup of various partitions.
+##
+#####################################################
+
+BACKUP_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-9700/"
+SECONDS_BETWEEN_BACKUPS=518400 # 6 days
+
+#####################################################
+##
+## Check if enough time has elapsed since last backup
+##
+#####################################################
+
+echo "system-backup on "$(date)
+
+if ! /home/brandon/scripts/touch-date-check \
+     -f "${BACKUP_ROOT_PATH}backuptime.txt" \
+     -s "${SECONDS_BETWEEN_BACKUPS}"
+then
+    echo "Canceling, as enough time has not elapsed since last backup."
+    exit 0
+fi
+
+#####################################################
+##
+## Back up partition table and LVM volume group definitions
+##
+#####################################################
+
+TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
+BACKDIR="${BACKUP_ROOT_PATH}${TIMESTAMP}"
+RES=0
+
+mkdir ${BACKDIR}
+sfdisk -d /dev/nvme0n1 > "${BACKDIR}/nvme0n1-sfdisk-partition-table.txt"
+cp /etc/lvm/backup/9700-vg "${BACKDIR}/etc-lvm-backup-9700-vg"
+
+#####################################################
+##
+## Back up /boot
+##
+#####################################################
+
+echo "backing up /boot: "$(date)
+
+if mountpoint -q /boot; then
+    MOUNTED_BOOT=1
+    if ! umount /boot
+    then
+        echo "unable to unmount /boot"
+        exit 1
+    fi
+fi
+
+if ! fsarchiver savefs -Z8 -j8 "${BACKDIR}/boot.fsa" /dev/nvme0n1p1
+then
+    echo "fsarchive exited with a fail status on /boot"
+    RES=1
+fi
+
+if [ "$MOUNTED_BOOT" -eq "1" ]; then
+    if ! mount /boot; then
+        echo "unable to mount /boot"
+        exit 1
+    fi
+fi
+
+#####################################################
+##
+## Back up /dev/9700-vg/arch-root
+##
+#####################################################
+
+echo "backing up arch-root: "$(date)
+
+if ! VOLGROP='9700-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+then
+    echo "unable to snap arch-root"
+    exit 1
+fi
+
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-root' /home/brandon/scripts/snap-lvm-fsarchive
+then
+    echo "fsarchive exited with a fail status on arch-root"
+    RES=1
+fi
+
+if ! VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
+then
+    echo "unable to delete snap arch-root-backup-snap"
+    exit 1
+fi
+
+#####################################################
+##
+## Back up /dev/9700-vg/arch-home
+##
+#####################################################
+
+echo "backing up arch-home: "$(date)
+
+if ! VOLGROP='9700-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+then
+    echo "unable to snap arch-home"
+    exit 1
+fi
+
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-home' /home/brandon/scripts/snap-lvm-fsarchive
+then
+    echo "fsarchive exited with a fail status on arch-home"
+    RES=1
+fi
+
+if ! VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
+then
+    echo "unable to delete snap arch-root-home-snap"
+    exit 1
+fi
+
+#####################################################
+##
+## Back up /dev/9700-vg/arch-vm
+##
+#####################################################
+
+echo "backing up arch-vm: "$(date)
+
+if ! VOLGROP='9700-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+then
+    echo "unable to snap arch-vm"
+    exit 1
+fi
+
+if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-vm' /home/brandon/scripts/snap-lvm-fsarchive
+then
+    echo "fsarchive exited with a fail status on arch-vm"
+    RES=1
+fi
+
+if ! VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete
+then
+    echo "unable to delete snap arch-vm-backup-snap"
+    exit 1
+fi
+
+date +%s > "${BACKUP_ROOT_PATH}backuptime.txt"
+
+echo "finished: "$(date)
+
+exit ${RES}
