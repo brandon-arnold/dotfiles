@@ -18,7 +18,7 @@ set $menu wofi --show=drun
 #
 # output * resolution 2560x1600 bg /home/brandon/Dropbox/Media\ and\ Snippets/Backgrounds/Acrylic.jpg fill scale 2
 
-output * resolution 2560x1600 scale 1.5
+output * resolution 2560x1600 bg /home/brandon/Dropbox/Media\ and\ Snippets/Backgrounds/Acrylic.jpg fill scale 2
 
 #
 # Example configuration:
@@ -201,23 +201,14 @@ bindsym $mod+r mode "resize"
 #
 # Read `man 5 sway-bar` for more information about this section.
 bar {
+    swaybar_command waybar
     position bottom
-    mode hide
     hidden_state hide
+    mode hide
     modifier $mod
-    font "DejaVu Sans Normal 14"
-
-    # When the status_command prints a new line to stdout, swaybar updates.
-    # The default just shows the current date and time.
-    # status_command i3status
-    status_command while "/home/brandon/scripts/sway-bar"; do sleep 1; done
-
-    colors {
-        statusline #ffffff
-        background #323232
-        inactive_workspace #999999ff #999999ff #5c5c5c
-    }
 }
+# waybar hide and show with mod keyboard
+# bindsym $mod exec --no-startup-id killall -SIGUSR1 waybar
 
 # Assign Emacs to Ctrl + Alt + 'e'
 bindsym Control+Mod1+e exec --no-startup-id edit
@@ -230,8 +221,8 @@ bindsym XF86AudioMute exec "pactl set-sink-mute 0 toggle"
 # bindsym Scroll_Lock
 # bindsym XF86Search
 # for these to work, the acpilight version of xbacklight must be used--see github for instructions on setting up
-bindsym XF86MonBrightnessDown exec xbacklight -dec 5
-bindsym XF86MonBrightnessUp exec xbacklight -inc 5
+bindsym XF86MonBrightnessDown exec brightnessctl set 5%-
+bindsym XF86MonBrightnessUp exec brightnessctl set +5%
 
 # Screenshots (scrot) assigned to Print Screen key, saved to ~/Downloads/...
 bindcode --release 107 exec --no-startup-id "~/scripts/screenshot-region";
@@ -240,9 +231,9 @@ include /etc/sway/config.d/*
 
 # Touchpad speed for wayland
 # see zerfix's info here: https://github.com/swaywm/sway/issues/3174#issuecomment-626690935
-input 1739:30383:DELL08AF:00_06CB:76AF_Touchpad {
+input 2362:628:PIXA3854:00_093A:0274_Touchpad {
     accel_profile adaptive
-    pointer_accel 0.25
+    pointer_accel -0.20
     dwt enabled
     natural_scroll enabled
     tap_button_map lrm 
@@ -252,3 +243,13 @@ input 1739:30383:DELL08AF:00_06CB:76AF_Touchpad {
 
 bindsym $mod+Shift+f exec qtfm
 # xwayland disable
+
+# capture all screens to clipboard    
+bindsym Shift+Print exec grim - | wl-copy    
+    
+# capture the specified screen area to clipboard    
+bindsym Shift+Alt+Print exec grim -g "$(slurp)" - | wl-copy    
+    
+# capture the focused monitor to clipboard    
+bindsym Shift+Control+Print exec grim -o $(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name') - | wl-copy
+

@@ -8,7 +8,7 @@
 ##
 #####################################################
 
-BACKUP_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-9700/"
+BACKUP_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
 SECONDS_BETWEEN_BACKUPS=518400 # 6 days
 
 #####################################################
@@ -39,7 +39,7 @@ RES=0
 
 mkdir ${BACKDIR}
 sfdisk -d /dev/nvme0n1 > "${BACKDIR}/nvme0n1-sfdisk-partition-table.txt"
-cp /etc/lvm/backup/9700-vg "${BACKDIR}/etc-lvm-backup-9700-vg"
+cp /etc/lvm/backup/fw16-vg "${BACKDIR}/etc-lvm-backup-fw16-vg"
 
 #####################################################
 ##
@@ -73,25 +73,25 @@ fi
 
 #####################################################
 ##
-## Back up /dev/9700-vg/arch-root
+## Back up /dev/fw16-vg/arch-root
 ##
 #####################################################
 
 echo "backing up arch-root: "$(date)
 
-if ! VOLGROP='9700-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+if ! VOLGROP='fw16-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
     echo "unable to snap arch-root"
     exit 1
 fi
 
-if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-root' /home/brandon/scripts/snap-lvm-fsarchive
+if ! FSAOPTS='-Z8 -j8' VOLGROP='fw16-vg' SNAPVOL='arch-root-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-root' /home/brandon/scripts/snap-lvm-fsarchive
 then
     echo "fsarchive exited with a fail status on arch-root"
     RES=1
 fi
 
-if ! VOLGROP='9700-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
+if ! VOLGROP='fw16-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
 then
     echo "unable to delete snap arch-root-backup-snap"
     exit 1
@@ -99,25 +99,25 @@ fi
 
 #####################################################
 ##
-## Back up /dev/9700-vg/arch-home
+## Back up /dev/fw16-vg/arch-home
 ##
 #####################################################
 
 echo "backing up arch-home: "$(date)
 
-if ! VOLGROP='9700-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+if ! VOLGROP='fw16-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
     echo "unable to snap arch-home"
     exit 1
 fi
 
-if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-home' /home/brandon/scripts/snap-lvm-fsarchive
+if ! FSAOPTS='-Z8 -j8' VOLGROP='fw16-vg' SNAPVOL='arch-home-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-home' /home/brandon/scripts/snap-lvm-fsarchive
 then
     echo "fsarchive exited with a fail status on arch-home"
     RES=1
 fi
 
-if ! VOLGROP='9700-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
+if ! VOLGROP='fw16-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
 then
     echo "unable to delete snap arch-root-home-snap"
     exit 1
@@ -125,25 +125,25 @@ fi
 
 #####################################################
 ##
-## Back up /dev/9700-vg/arch-vm
+## Back up /dev/fw16-vg/arch-vm
 ##
 #####################################################
 
 echo "backing up arch-vm: "$(date)
 
-if ! VOLGROP='9700-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+if ! VOLGROP='fw16-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
     echo "unable to snap arch-vm"
     exit 1
 fi
 
-if ! FSAOPTS='-Z8 -j8' VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-vm' /home/brandon/scripts/snap-lvm-fsarchive
+if ! FSAOPTS='-Z8 -j8' VOLGROP='fw16-vg' SNAPVOL='arch-vm-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-vm' /home/brandon/scripts/snap-lvm-fsarchive
 then
     echo "fsarchive exited with a fail status on arch-vm"
     RES=1
 fi
 
-if ! VOLGROP='9700-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete
+if ! VOLGROP='fw16-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete
 then
     echo "unable to delete snap arch-vm-backup-snap"
     exit 1
