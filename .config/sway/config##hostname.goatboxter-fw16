@@ -207,8 +207,6 @@ bar {
     mode hide
     modifier $mod
 }
-# waybar hide and show with mod keyboard
-# bindsym $mod exec --no-startup-id killall -SIGUSR1 waybar
 
 # Assign Emacs to Ctrl + Alt + 'e'
 bindsym Control+Mod1+e exec --no-startup-id edit
@@ -223,9 +221,6 @@ bindsym XF86AudioMute exec "pactl set-sink-mute 0 toggle"
 # for these to work, the acpilight version of xbacklight must be used--see github for instructions on setting up
 bindsym XF86MonBrightnessDown exec brightnessctl set 5%-
 bindsym XF86MonBrightnessUp exec brightnessctl set +5%
-
-# Screenshots (scrot) assigned to Print Screen key, saved to ~/Downloads/...
-bindcode --release 107 exec --no-startup-id "~/scripts/screenshot-region";
 
 include /etc/sway/config.d/*
 
@@ -245,11 +240,13 @@ bindsym $mod+Shift+f exec qtfm
 # xwayland disable
 
 # capture all screens to clipboard    
-bindsym Shift+Print exec grim - | wl-copy    
+bindsym Shift+Alt+Print exec grim - | wl-copy    
     
 # capture the specified screen area to clipboard    
-bindsym Shift+Alt+Print exec grim -g "$(slurp)" - | wl-copy    
+bindsym Shift+Alt+4 exec grim -g "$(slurp)" - | wl-copy    
     
 # capture the focused monitor to clipboard    
-bindsym Shift+Control+Print exec grim -o $(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name') - | wl-copy
+bindsym Shift+Alt+Control+Print exec grim -o $(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name') - | wl-copy
 
+exec --no-startup-id nm-applet
+exec --no-startup-id libinput-gestures

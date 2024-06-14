@@ -23,13 +23,12 @@
         "idle_inhibitor",
         "pulseaudio",
         "network",
-        "power-profiles-daemon",
+        // "power-profiles-daemon",
         "cpu",
-        "memory",
-        "temperature",
+        // "memory",
+        // "temperature",
         "backlight",
-        "keyboard-state",
-        "sway/language",
+        // "sway/language",
         "battery",
         "battery#bat2",
         "clock",
@@ -132,6 +131,7 @@
         // "device": "acpi_video1",
         "format": "{percent}% {icon}",
         "format-icons": ["", "", "", "", "", "", "", "", ""]
+        // requires ttf-meslo-nerd font
     },
     "battery": {
         "states": {
