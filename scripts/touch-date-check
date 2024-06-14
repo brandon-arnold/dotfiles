@@ -1,0 +1,53 @@
+#!/bin/bash
+
+#####################################################
+##
+## touch-date-check
+##
+## Checks the seconds since that in the unixtime of the provided file
+##   against the provided number of seconds to wait
+##   with a fail / success result if the difference is lesser / greater
+##
+#####################################################
+
+usage() {
+    echo "Usage: $0 [-f /path/to/unixtime.txt] [-s SECONDS_TO_WAIT]" 1>&2;
+}
+
+while getopts ":f:s:" o; do
+    case "${o}" in
+        f)
+            TS_FILE=${OPTARG}
+            ;;
+        s)
+            SECONDS_TO_WAIT=${OPTARG}
+            ;;
+        *)
+            usage
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "${TS_FILE}" || -z "${SECONDS_TO_WAIT}" ]]; then
+    usage
+    exit 1
+fi
+
+if ! test -f "${TS_FILE}"; then
+    echo "${TS_FILE} does not exist"
+    exit 1
+fi
+
+CURDATE=$(date +%s)
+PREVDATE=$(cat "${TS_FILE}")
+DATEDIFF="$((CURDATE-PREVDATE))"
+
+if [[ $SECONDS_TO_WAIT -gt $DATEDIFF ]]
+then
+    echo "${DATEDIFF} seconds since last action is less than ${SECONDS_TO_WAIT} seconds to wait"
+    exit 1
+fi
+
+echo "${DATEDIFF} seconds since last action is greater than ${SECONDS_TO_WAIT} seconds to wait"
+exit 0
