@@ -8,6 +8,7 @@
 ##
 #####################################################
 
+# BACKUP_ROOT_PATH="/mnt/backup/"
 BACKUP_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
 SECONDS_BETWEEN_BACKUPS=518400 # 6 days
 

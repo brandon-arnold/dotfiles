@@ -1,7 +1,7 @@
 * {
     /* `otf-font-awesome` is required to be installed for icons */
     font-family: FontAwesome, Roboto, Helvetica, Arial, sans-serif;
-    font-size: 13px;
+    font-size: 26px;
 }
 
 window#waybar {
@@ -45,7 +45,7 @@ button {
 /* https://github.com/Alexays/Waybar/wiki/FAQ#the-workspace-buttons-have-a-strange-hover-effect */
 button:hover {
     background: inherit;
-    box-shadow: inset 0 -3px #ffffff;
+    box-shadow: inset 0 -6px #ffffff;
 }
 
 /* you can set a style on hover for any module like this */
@@ -54,7 +54,7 @@ button:hover {
 }
 
 #workspaces button {
-    padding: 0 5px;
+    padding: 0 10px;
     background-color: transparent;
     color: #ffffff;
 }
@@ -65,7 +65,7 @@ button:hover {
 
 #workspaces button.focused {
     background-color: #64727D;
-    box-shadow: inset 0 -3px #ffffff;
+    box-shadow: inset 0 -6px #ffffff;
 }
 
 #workspaces button.urgent {
@@ -74,7 +74,7 @@ button:hover {
 
 #mode {
     background-color: #64727D;
-    box-shadow: inset 0 -3px #ffffff;
+    box-shadow: inset 0 -6px #ffffff;
 }
 
 #clock,
@@ -88,13 +88,14 @@ button:hover {
 #pulseaudio,
 #wireplumber,
 #custom-media,
+#custom-swaylock,
 #tray,
 #mode,
 #idle_inhibitor,
 #scratchpad,
 #power-profiles-daemon,
 #mpd {
-    padding: 0 10px;
+    padding: 0 20px;
     color: #ffffff;
 }
 
@@ -115,6 +116,7 @@ button:hover {
 
 #clock {
     background-color: #64727D;
+    padding: 10 20 0 20;
 }
 
 #battery {
@@ -224,6 +226,12 @@ label:focus {
 
 #custom-media.custom-vlc {
     background-color: #ffa000;
+}
+
+#custom-swaylock {
+    background-color: #66cc99;
+    color: #2a5c45;
+    padding: 10 20 0 20;
 }
 
 #temperature {

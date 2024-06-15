@@ -5,7 +5,7 @@
     "ipc": true,
     // "layer": "top", // Waybar at top layer
     "position": "bottom", // Waybar position (top|bottom|left|right)
-    "height": 15, // Waybar height (to be removed for auto height)
+    "height": 45, // Waybar height (to be removed for auto height)
     // "width": 1280, // Waybar width
     "spacing": 4, // Gaps between modules (4px)
     // Choose the order of the modules
@@ -31,6 +31,7 @@
         // "sway/language",
         "battery",
         "battery#bat2",
+        "custom/swaylock",
         "clock",
         "tray"
     ],
@@ -189,6 +190,10 @@
             "default": ["", "", ""]
         },
         "on-click": "pavucontrol"
+    },
+    "custom/swaylock": {
+        "format": "Lock?",
+        "on-click": "swaylock -f -c 000000"
     },
     "custom/media": {
         "format": "{icon} {}",

@@ -1,6 +1,8 @@
 ### Variables
 set $mod Mod4
 
+seat seat0 xcursor_theme Adwaita 36
+
 # Home row direction keys, like vim
 set $left h
 set $down j
@@ -18,7 +20,7 @@ set $menu wofi --show=drun
 #
 # output * resolution 2560x1600 bg /home/brandon/Dropbox/Media\ and\ Snippets/Backgrounds/Acrylic.jpg fill scale 2
 
-output * resolution 2560x1600 bg /home/brandon/Dropbox/Media\ and\ Snippets/Backgrounds/Acrylic.jpg fill scale 2
+output * resolution 2560x1600 bg /home/brandon/Dropbox/Media\ and\ Snippets/Backgrounds/Acrylic.jpg fill
 
 #
 # Example configuration:
@@ -31,11 +33,11 @@ output * resolution 2560x1600 bg /home/brandon/Dropbox/Media\ and\ Snippets/Back
 #
 # Example configuration:
 #
-# exec swayidle -w \
-#          timeout 300 'swaylock -f -c 000000' \
-#          timeout 600 'swaymsg "output * dpms off"' \
-#               resume 'swaymsg "output * dpms on"' \
-#          before-sleep 'swaylock -f -c 000000'
+exec swayidle -w \
+         timeout 300 'swaylock -f -c 000000' \
+         timeout 600 'swaymsg "output * dpms off"' \
+              resume 'swaymsg "output * dpms on"' \
+         before-sleep 'swaylock -f -c 000000'
 #
 # This will lock your screen after 300 seconds of inactivity, then turn off
 # your displays after another 300 seconds, and turn your screens back on when
@@ -228,7 +230,7 @@ include /etc/sway/config.d/*
 # see zerfix's info here: https://github.com/swaywm/sway/issues/3174#issuecomment-626690935
 input 2362:628:PIXA3854:00_093A:0274_Touchpad {
     accel_profile adaptive
-    pointer_accel -0.20
+    pointer_accel -0.05
     dwt enabled
     natural_scroll enabled
     tap_button_map lrm 
