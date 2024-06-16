@@ -1,0 +1,15 @@
+#!/bin/bash
+
+BG_PATH=/home/brandon/Pictures/Backgrounds/2560x1600
+BG_EXT=.jpg
+
+NUM_FILES=$(ls $BG_PATH | wc -l)
+RANDOM_FILE=$(ls $BG_PATH | sed -n "$((($RANDOM % $NUM_FILES) + 1))p")
+
+
+if [ -e $BG_PATH$BG_EXT ]; then
+    rm $BG_PATH$BG_EXT
+fi
+
+ln -s $BG_PATH/$RANDOM_FILE $BG_PATH$BG_EXT
+swaymsg reload

@@ -1,0 +1,8 @@
+[Unit]
+Description=Sway Random Background
+
+[Timer]
+OnCalendar=hourly
+
+[Install]
+WantedBy=timers.target

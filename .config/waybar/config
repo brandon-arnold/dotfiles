@@ -191,10 +191,10 @@
         },
         "on-click": "pavucontrol"
     },
-    "custom/swaylock": {
-        "format": "Lock?",
-        "on-click": "swaylock -f -c 000000"
-    },
+    // "custom/swaylock": {
+    //     "format": "Lock?",
+    //     "on-click": "swaylock -f -c 000000"
+    // },
     "custom/media": {
         "format": "{icon} {}",
         "return-type": "json",
