@@ -3,13 +3,15 @@
 BG_PATH=/home/brandon/Pictures/Backgrounds/2560x1600
 BG_EXT=.jpg
 
-NUM_FILES=$(ls $BG_PATH | wc -l)
-RANDOM_FILE=$(ls $BG_PATH | sed -n "$((($RANDOM % $NUM_FILES) + 1))p")
+NUM_FILES=$(ls $BG_PATH/*$BG_EXT | wc -l)
+RANDOM_FILE=$(ls $BG_PATH/*$BG_EXT | sed -n "$((($RANDOM % $NUM_FILES) + 1))p")
 
+swaymsg "output * resolution 2560x1600 bg $RANDOM_FILE fill"
 
-if [ -e $BG_PATH$BG_EXT ]; then
-    rm $BG_PATH$BG_EXT
-fi
+## old method making a symlink to the file
+# if [ -e $BG_PATH$BG_EXT ]; then
+#     rm $BG_PATH$BG_EXT
+# fi
+# ln -s $RANDOM_FILE $BG_PATH$BG_EXT
+# swaymsg "output * resolution 2560x1600 bg $BG_PATH$BG_EXT fill"
 
-ln -s $BG_PATH/$RANDOM_FILE $BG_PATH$BG_EXT
-swaymsg reload
