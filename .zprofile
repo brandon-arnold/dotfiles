@@ -42,7 +42,7 @@ slack() {
 
 alias top="sudo htop"
 # alias cat="bat"
-alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules"
+alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules --enable-delete"
 
 # start x on login -- see .xinitrc for default window manager
 # if [ -z "$DISPLAY" ] && [ -n "$XDG_VTNR" ] && [ "$XDG_VTNR" -eq 1 ]; then
@@ -56,3 +56,5 @@ alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules"
 # fi
 
 export PATH=$PATH:$(npm get prefix)/bin
+
+export QSYS_ROOTDIR="/home/brandon/.cache/yay/quartus-free/pkg/quartus-free-quartus/opt/intelFPGA/23.1/quartus/sopc_builder/bin"

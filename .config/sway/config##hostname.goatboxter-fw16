@@ -17,9 +17,6 @@ set $menu wofi --show=drun
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
 # output * resolution 3840x2160 bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill scale 2
-#
-# output * resolution 2560x1600 bg /home/brandon/Dropbox/Media\ and\ Snippets/Backgrounds/Acrylic.jpg fill scale 2
-
 output * resolution 2560x1600 bg /home/brandon/Pictures/Backgrounds/2560x1600.jpg fill
 
 #
@@ -242,6 +239,20 @@ input 2362:628:PIXA3854:00_093A:0274_Touchpad {
     click_method clickfinger
 }
 
+input 20547:21570:PloopyCo_Trackball_Mouse {
+      pointer_accel -1
+}
+
+# input 2362:628:PIXA3854:00_093A:0274_Mouse {
+#     accel_profile adaptive
+#     pointer_accel -0.05
+#     dwt enabled
+#     natural_scroll enabled
+#     tap_button_map lrm 
+#     scroll_method two_finger
+#     click_method clickfinger
+# }
+
 bindsym $mod+Shift+f exec QT_SCALE_FACTOR=2 qtfm
 # xwayland disable
 
@@ -254,5 +265,9 @@ bindsym Shift+Alt+4 exec grim -g "$(slurp)" - | wl-copy
 # capture the focused monitor to clipboard    
 bindsym Shift+Alt+Control+Print exec grim -o $(swaymsg -t get_outputs | jq -r '.[] | select(.focused) | .name') - | wl-copy
 
+# lock on Alt+Control+Delete
+bindsym Alt+Control+Delete exec swaylock -f -c 000000
+
 exec --no-startup-id nm-applet
 exec --no-startup-id libinput-gestures
+exec --no-startup-id /usr/lib/mate-polkit/polkit-mate-authentication-agent-1

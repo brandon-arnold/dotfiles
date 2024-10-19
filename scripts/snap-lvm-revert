@@ -1,0 +1,14 @@
+#!/bin/bash
+# VOLGROP= name of the volume group
+# SNAPVOL= name of the snapshot to delete
+
+# ----------------------------------------------------------------------------------------------
+
+# revert the snapshot
+if ! lvconvert --merge /dev/${VOLGROP}/${SNAPVOL}
+then
+      echo "cannot revert the lvm snapshot"
+      exit 1
+fi
+
+exit 0

@@ -35,3 +35,5 @@ if [ -f /usr/share/nvm/init-nvm.sh ]; then
 fi
 
 setopt HIST_IGNORE_SPACE
+
+export QSYS_ROOTDIR="/home/brandon/.cache/yay/quartus-free/pkg/quartus-free-quartus/opt/intelFPGA/23.1/quartus/sopc_builder/bin"

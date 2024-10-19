@@ -13,6 +13,11 @@ export MAKEFLAGS="-j$(nproc)"
 
 export HISTCONTROL=ignorespace
 
-# export GDK_SCALE=1
-# export GDK_DPI_SCALE=1
-# export QT_AUTO_SCREEN_SCALE_FACTOR=1
+# export GDK_SCALE=1.75
+# export GDK_DPI_SCALE=1.75
+# export QT_AUTO_SCREEN_SCALE_FACTOR=1.75
+# export QT_SCALE_FACTOR=1.75
+
+export LM_LICENSE_FILE=/home/brandon/LR-178013_License.dat
+
+export QSYS_ROOTDIR="/home/brandon/.cache/yay/quartus-free/pkg/quartus-free-quartus/opt/intelFPGA/23.1/quartus/sopc_builder/bin"

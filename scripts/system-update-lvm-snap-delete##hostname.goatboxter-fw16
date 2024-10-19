@@ -2,5 +2,4 @@
 
 VOLGROP='fw16-vg' SNAPVOL='arch-root-update-snap' /home/brandon/scripts/snap-lvm-delete
 VOLGROP='fw16-vg' SNAPVOL='arch-home-update-snap' /home/brandon/scripts/snap-lvm-delete
-VOLGROP='fw16-vg' SNAPVOL='arch-downloads-update-snap' /home/brandon/scripts/snap-lvm-delete
 VOLGROP='fw16-vg' SNAPVOL='arch-vm-update-snap' /home/brandon/scripts/snap-lvm-delete

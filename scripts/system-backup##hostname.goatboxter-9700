@@ -23,7 +23,7 @@ if ! /home/brandon/scripts/touch-date-check \
      -f "${BACKUP_ROOT_PATH}backuptime.txt" \
      -s "${SECONDS_BETWEEN_BACKUPS}"
 then
-    echo "Canceling, as enough time has not elapsed since last backup."
+    echo "Canceling, as not enough time has elapsed since last backup."
     exit 0
 fi
 

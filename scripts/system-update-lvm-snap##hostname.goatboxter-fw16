@@ -2,5 +2,4 @@
 
 VOLGROP='fw16-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-update-snap' SNAPSIZ='100G' /home/brandon/scripts/snap-lvm
 VOLGROP='fw16-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-update-snap' SNAPSIZ='10G' /home/brandon/scripts/snap-lvm
-VOLGROP='fw16-vg' ORIGVOL='arch-downloads' SNAPVOL='arch-downloads-update-snap' SNAPSIZ='10G' /home/brandon/scripts/snap-lvm
 VOLGROP='fw16-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-update-snap' SNAPSIZ='10G' /home/brandon/scripts/snap-lvm

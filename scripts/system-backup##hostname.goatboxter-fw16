@@ -8,8 +8,8 @@
 ##
 #####################################################
 
-# BACKUP_ROOT_PATH="/mnt/backup/"
-BACKUP_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
+BACKUP_ROOT_PATH="/mnt/backup/"
+BACKUP_SECONDARY_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
 SECONDS_BETWEEN_BACKUPS=518400 # 6 days
 
 #####################################################
@@ -24,13 +24,13 @@ if ! /home/brandon/scripts/touch-date-check \
      -f "${BACKUP_ROOT_PATH}backuptime.txt" \
      -s "${SECONDS_BETWEEN_BACKUPS}"
 then
-    echo "Canceling, as enough time has not elapsed since last backup."
+    echo "Canceling, as not enough time has elapsed since last backup."
     exit 0
 fi
 
 #####################################################
 ##
-## Back up partition table and LVM volume group definitions
+## Back up partition table(s) and LVM volume group definitions
 ##
 #####################################################
 
@@ -39,8 +39,10 @@ BACKDIR="${BACKUP_ROOT_PATH}${TIMESTAMP}"
 RES=0
 
 mkdir ${BACKDIR}
-sfdisk -d /dev/nvme0n1 > "${BACKDIR}/nvme0n1-sfdisk-partition-table.txt"
+sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b474d80be > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b474d80be.txt"
+sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4cb006fd > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b4cb006fd.txt"
 cp /etc/lvm/backup/fw16-vg "${BACKDIR}/etc-lvm-backup-fw16-vg"
+cp /etc/lvm/backup/fw16-2-vg "${BACKDIR}/etc-lvm-backup-fw16-2-vg"
 
 #####################################################
 ##
@@ -59,7 +61,7 @@ if mountpoint -q /boot; then
     fi
 fi
 
-if ! fsarchiver savefs -Z8 -j8 "${BACKDIR}/boot.fsa" /dev/nvme0n1p1
+if ! fsarchiver savefs -Z8 -j8 "${BACKDIR}/boot.fsa" /dev/disk/by-uuid/5F7D-3EB0
 then
     echo "fsarchive exited with a fail status on /boot"
     RES=1
@@ -151,6 +153,23 @@ then
 fi
 
 date +%s > "${BACKUP_ROOT_PATH}backuptime.txt"
+
+
+#####################################################
+##
+## COPY backup to secondary path
+##
+#####################################################
+SECONDARYBACKDIR="${BACKUP_SECONDARY_ROOT_PATH}${TIMESTAMP}"
+
+echo "copying backup to secondary path"
+if mkdir ${SECONDARYBACKDIR} ; then
+    cp -fR ${BACKDIR}/* ${SECONDARYBACKDIR}
+else
+    echo "unable to copy backup to secondary path"
+    echo "failed to mkdir ${SECONDARYBACKDIR}"
+    RES=1
+fi
 
 echo "finished: "$(date)
 
