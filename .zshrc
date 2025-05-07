@@ -36,4 +36,5 @@ fi
 
 setopt HIST_IGNORE_SPACE
 
-export QSYS_ROOTDIR="/home/brandon/.cache/yay/quartus-free/pkg/quartus-free-quartus/opt/intelFPGA/23.1/quartus/sopc_builder/bin"
+export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
+export NODE_OPTIONS='--disable-warning=ExperimentalWarning'

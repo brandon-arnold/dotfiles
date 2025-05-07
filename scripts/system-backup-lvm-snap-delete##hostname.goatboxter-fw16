@@ -1,0 +1,5 @@
+#!/bin/bash
+
+VOLGROP='fw16-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
+VOLGROP='fw16-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
+VOLGROP='fw16-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete

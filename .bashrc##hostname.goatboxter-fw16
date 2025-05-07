@@ -17,7 +17,12 @@ export HISTCONTROL=ignorespace
 # export GDK_DPI_SCALE=1.75
 # export QT_AUTO_SCREEN_SCALE_FACTOR=1.75
 # export QT_SCALE_FACTOR=1.75
+# export LIBGL_ALWAYS_SOFTWARE="1"
 
 export LM_LICENSE_FILE=/home/brandon/LR-178013_License.dat
+export LM_LICENSE_FILE=/home/brandon/intelFPGA/LR-231771_License.dat
+export MGLS_LICENSE_FILE=/home/brandon/intelFPGA/LR-231771_License.dat
 
-export QSYS_ROOTDIR="/home/brandon/.cache/yay/quartus-free/pkg/quartus-free-quartus/opt/intelFPGA/23.1/quartus/sopc_builder/bin"
+export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
+
+export LATTICE_LICENSE_FILE=/home/brandon/opt/lscc/diamond/3.14/license/license.dat

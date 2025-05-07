@@ -1,6 +1,6 @@
 # User PATH
 typeset -U path
-path=(~/bin ~/scripts /usr/local/go/bin /home/brandon/.local/bin $path[@])
+path=(/opt/rocm/bin ~/opt/altera/24.1std/quartus/bin ~/opt/altera/24.1std/questa_fe/bin ~/bin ~/scripts /usr/local/go/bin /home/brandon/.local/bin /home/brandon/opt/lscc/diamond/3.14/bin/lin64/ $path[@])
 
 # Hex to decimal, decimal to hex. Ex:
 # $ h2d FF
@@ -57,4 +57,4 @@ alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules --enabl
 
 export PATH=$PATH:$(npm get prefix)/bin
 
-export QSYS_ROOTDIR="/home/brandon/.cache/yay/quartus-free/pkg/quartus-free-quartus/opt/intelFPGA/23.1/quartus/sopc_builder/bin"
+export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"

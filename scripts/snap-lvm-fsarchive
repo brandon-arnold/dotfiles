@@ -7,7 +7,7 @@
 
 PATH="${PATH}:/usr/sbin:/sbin:/usr/bin:/bin"
 
-if fsarchiver savefs ${FSAOPTS} ${BACKDIR}/${BACKNAM}.fsa  --exclude "/home/brandon/.cache" --exclude "/home/brandon/.local" /dev/${VOLGROP}/${SNAPVOL}
+if fsarchiver savefs ${FSAOPTS} ${BACKDIR}/${BACKNAM}.fsa  --exclude='/home/brandon/.cache/*' --exclude='/home/brandon/.local/*' --exclude='/home/brandon/Dropbox/*' /dev/${VOLGROP}/${SNAPVOL}
 then
     # md5sum ${BACKDIR}/${BACKNAM}.fsa > ${BACKDIR}/${BACKNAM}.md5
     RES=0

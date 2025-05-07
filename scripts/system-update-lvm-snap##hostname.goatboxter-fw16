@@ -1,5 +1,48 @@
 #!/bin/bash
 
+#####################################################
+##
+## Back up /boot
+##
+#####################################################
+BACKUP_ROOT_PATH="/mnt/backup/"
+TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
+BACKDIR="${BACKUP_ROOT_PATH}${TIMESTAMP}_boot"
+
+echo "backing up /boot: "$(date)
+
+if mountpoint -q /boot; then
+    MOUNTED_BOOT=1
+    if ! umount /boot
+    then
+        echo "unable to unmount /boot"
+        exit 1
+    fi
+fi
+
+mkdir ${BACKDIR}
+
+if ! fsarchiver savefs -Z8 -j8 "${BACKDIR}/boot.fsa" /dev/disk/by-uuid/5F7D-3EB0
+then
+    echo "fsarchive exited with a fail status on /boot"
+    exit 1
+fi
+
+if [ "$MOUNTED_BOOT" -eq "1" ]; then
+    if ! mount /boot; then
+        echo "unable to mount /boot"
+        exit 1
+    fi
+fi
+
+#####################################################
+##
+## Taking snapshots of arch-root, arch-home, and arch-vm
+##
+#####################################################
+
+echo "taking snapshots of arch-root, arch-home, and arch-vm: "$(date)
+
 VOLGROP='fw16-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-update-snap' SNAPSIZ='100G' /home/brandon/scripts/snap-lvm
 VOLGROP='fw16-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-update-snap' SNAPSIZ='10G' /home/brandon/scripts/snap-lvm
 VOLGROP='fw16-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-update-snap' SNAPSIZ='10G' /home/brandon/scripts/snap-lvm

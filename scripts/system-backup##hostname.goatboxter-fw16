@@ -10,7 +10,8 @@
 
 BACKUP_ROOT_PATH="/mnt/backup/"
 BACKUP_SECONDARY_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
-SECONDS_BETWEEN_BACKUPS=518400 # 6 days
+DAYS_BETWEEN_BACKUPS=6
+MAX_BACKUP_AGE_DAYS=13
 
 #####################################################
 ##
@@ -20,6 +21,8 @@ SECONDS_BETWEEN_BACKUPS=518400 # 6 days
 
 echo "system-backup on "$(date)
 
+SECONDS_BETWEEN_BACKUPS=$((DAYS_BETWEEN_BACKUPS * 24 * 60 * 60))
+
 if ! /home/brandon/scripts/touch-date-check \
      -f "${BACKUP_ROOT_PATH}backuptime.txt" \
      -s "${SECONDS_BETWEEN_BACKUPS}"
@@ -27,6 +30,14 @@ then
     echo "Canceling, as not enough time has elapsed since last backup."
     exit 0
 fi
+
+#####################################################
+##
+## Delete backups older than MAX_BACKUP_AGE_DAYS
+##
+#####################################################
+
+find "$BACKUP_ROOT_PATH" -maxdepth 1 -type d -name '20*' -mtime "+$MAX_BACKUP_AGE_DAYS" -exec rm -rf {} +
 
 #####################################################
 ##
@@ -74,6 +85,8 @@ if [ "$MOUNTED_BOOT" -eq "1" ]; then
     fi
 fi
 
+sha256sum "${BACKDIR}/boot.fsa" > "${BACKDIR}/boot.fsa.sha256"
+
 #####################################################
 ##
 ## Back up /dev/fw16-vg/arch-root
@@ -81,6 +94,8 @@ fi
 #####################################################
 
 echo "backing up arch-root: "$(date)
+
+TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
 
 if ! VOLGROP='fw16-vg' ORIGVOL='arch-root' SNAPVOL='arch-root-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
@@ -100,6 +115,8 @@ then
     exit 1
 fi
 
+sha256sum "${BACKDIR}/arch-root.fsa" > "${BACKDIR}/arch-root.fsa.sha256"
+
 #####################################################
 ##
 ## Back up /dev/fw16-vg/arch-home
@@ -107,6 +124,8 @@ fi
 #####################################################
 
 echo "backing up arch-home: "$(date)
+
+TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
 
 if ! VOLGROP='fw16-vg' ORIGVOL='arch-home' SNAPVOL='arch-home-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
@@ -126,6 +145,8 @@ then
     exit 1
 fi
 
+sha256sum "${BACKDIR}/arch-home.fsa" > "${BACKDIR}/arch-home.fsa.sha256"
+
 #####################################################
 ##
 ## Back up /dev/fw16-vg/arch-vm
@@ -133,6 +154,8 @@ fi
 #####################################################
 
 echo "backing up arch-vm: "$(date)
+
+TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete
 
 if ! VOLGROP='fw16-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
@@ -152,24 +175,38 @@ then
     exit 1
 fi
 
-date +%s > "${BACKUP_ROOT_PATH}backuptime.txt"
+sha256sum "${BACKDIR}/arch-vm.fsa" > "${BACKDIR}/arch-vm.fsa.sha256"
 
+
+#####################################################
+##
+## Updating backuptime
+##
+#####################################################
+
+if [[ ${RES} -lt 1 ]]
+then
+    date +%s > "${BACKUP_ROOT_PATH}backuptime.txt"
+else
+    echo "error with backup; exiting without updating backuptime: "$(date)
+    exit ${RES}
+fi
 
 #####################################################
 ##
 ## COPY backup to secondary path
 ##
 #####################################################
-SECONDARYBACKDIR="${BACKUP_SECONDARY_ROOT_PATH}${TIMESTAMP}"
+# SECONDARYBACKDIR="${BACKUP_SECONDARY_ROOT_PATH}${TIMESTAMP}"
 
-echo "copying backup to secondary path"
-if mkdir ${SECONDARYBACKDIR} ; then
-    cp -fR ${BACKDIR}/* ${SECONDARYBACKDIR}
-else
-    echo "unable to copy backup to secondary path"
-    echo "failed to mkdir ${SECONDARYBACKDIR}"
-    RES=1
-fi
+# echo "copying backup to secondary path"
+# if mkdir ${SECONDARYBACKDIR} ; then
+#     cp -fR ${BACKDIR}/* ${SECONDARYBACKDIR}
+# else
+#     echo "unable to copy backup to secondary path"
+#     echo "failed to mkdir ${SECONDARYBACKDIR}"
+#     RES=1
+# fi
 
 echo "finished: "$(date)
 

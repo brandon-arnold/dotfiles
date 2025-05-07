@@ -1,11 +1,14 @@
 #!/bin/bash
 # VOLGROP= name of the volume group
 # SNAPVOL= name of the snapshot to delete
+# TRY_SILENT=1 if no error is required
 
 # ----------------------------------------------------------------------------------------------
 
-# remove the snapshot
-if ! lvremove -f /dev/${VOLGROP}/${SNAPVOL} >/dev/null 2>&1
+if [ ! -z $TRY_SILENT ] && test $TRY_SILENT -gt 0;
+then
+    lvremove -f fw16-vg/arch-root-backup-snap 2>/dev/null
+elif ! lvremove -f /dev/${VOLGROP}/${SNAPVOL} >/dev/null 2>&1
 then
       echo "cannot remove the lvm snapshot"
       exit 1
