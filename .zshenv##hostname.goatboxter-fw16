@@ -23,3 +23,6 @@ export LM_LICENSE_FILE=/home/brandon/intelFPGA/LR-231771_License.dat
 export MGLS_LICENSE_FILE=/home/brandon/intelFPGA/LR-231771_License.dat
 export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
 export LATTICE_LICENSE_FILE=/home/brandon/opt/lscc/diamond/3.14/license/license.dat
+
+export XDG_RUNTIME_DIR="/run/user/$UID"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"

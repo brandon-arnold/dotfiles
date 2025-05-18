@@ -27,7 +27,8 @@ background = "0x000000"
 foreground = "0xd0d0d0"
 
 [font]
-size = 20.0
+size = 15.0
+# 20.0 for laptop screen, 15.0 for office screens
 
 [font.normal]
 family = "monospace"

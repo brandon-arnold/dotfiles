@@ -41,19 +41,68 @@ find "$BACKUP_ROOT_PATH" -maxdepth 1 -type d -name '20*' -mtime "+$MAX_BACKUP_AG
 
 #####################################################
 ##
-## Back up partition table(s) and LVM volume group definitions
+## Init backup params and path
+##
+#####################################################
+TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
+BACKDIR="${BACKUP_ROOT_PATH}${TIMESTAMP}"
+RES=0 # returned by this script to indicate any errors
+mkdir ${BACKDIR}
+
+#####################################################
+##
+## Include the current version of this backup for documentation
 ##
 #####################################################
 
-TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
-BACKDIR="${BACKUP_ROOT_PATH}${TIMESTAMP}"
-RES=0
+cp $(readlink -f "$0") "${BACKDIR}"
 
-mkdir ${BACKDIR}
+#####################################################
+##
+## Back up partition table(s), LVM metadata, and block (filesystem) UUIDs
+##
+## For restoration, use `sfdisk` to restore the partition tables, `pvcreate` and
+##     `vgcfgrestore` to restore LVM, and `fsarchiver` to restore the filesystems.
+##
+## Note on UUIDs: there are partition UUIDs (PARTUUIDs), LVM UUIDs, and filesystem UUIDs.
+##
+##   - Partition UUIDs will be important for the EFI NVRAM to find the rEFInd boot
+##     partition and for the boot loader to find the swap and LVM partitions. Use
+##     gdisk(8) to modify the PARTUUIDs on a new system to match, or `efibootmgr`
+##     to do the reverse (update the UUID in the NVRAM entry); in both cases--
+##     especially the second--run mkinitcpio and initramfs when restoring the
+##     new system.
+##   - LVM UUIDs should match, too, which will be referenced by LVM itself and
+##     possibly other systems backed up in the root and home volumes. After
+##     creating the LVM physical volume, use something like
+##     vgcfgrestore -f /path/to/etc-lvm-backup VOLUME_GROUP_NAME 
+##     to get the LVM metadata synced up for free.
+##   - Block/filesystem UUIDs will be important for the kernel to automount from
+##     the /etc/fstab entry. `fsarchiver` is used to back up filesystems,
+##     and its corresponding restoration should bring back the block UUIDs for
+##     free. If you need to do it manually, use mlabel(1) to modify them to match
+##     /etc/fstab, or do the reverse by updating /etc/fstab to the new UUIDs.
+##
+## See inline comments on which steps back up each UUID type.
+##
+#####################################################
+
+# includes PARTUUIDs
 sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b474d80be > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b474d80be.txt"
 sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4cb006fd > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b4cb006fd.txt"
+# includes LVM UUIDs
 cp /etc/lvm/backup/fw16-vg "${BACKDIR}/etc-lvm-backup-fw16-vg"
 cp /etc/lvm/backup/fw16-2-vg "${BACKDIR}/etc-lvm-backup-fw16-2-vg"
+# includes filesystem UUIDs
+blkid > "${BACKDIR}/blkid.txt"
+
+#####################################################
+##
+## Back up NVRAM
+##
+#####################################################
+
+efibootmgr -v > "${BACKDIR}/efibootmgr.txt"
 
 #####################################################
 ##
@@ -149,38 +198,38 @@ sha256sum "${BACKDIR}/arch-home.fsa" > "${BACKDIR}/arch-home.fsa.sha256"
 
 #####################################################
 ##
-## Back up /dev/fw16-vg/arch-vm
+## Back up /dev/fw16-vg/arch-vm2
 ##
 #####################################################
 
-echo "backing up arch-vm: "$(date)
+echo "backing up arch-vm2: "$(date)
 
-TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete
+TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-vm2-backup-snap' /home/brandon/scripts/snap-lvm-delete
 
-if ! VOLGROP='fw16-vg' ORIGVOL='arch-vm' SNAPVOL='arch-vm-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
+if ! VOLGROP='fw16-vg' ORIGVOL='arch-vm2' SNAPVOL='arch-vm2-backup-snap' SNAPSIZ='40G' /home/brandon/scripts/snap-lvm
 then
-    echo "unable to snap arch-vm"
+    echo "unable to snap arch-vm2"
     exit 1
 fi
 
-if ! FSAOPTS='-Z8 -j8' VOLGROP='fw16-vg' SNAPVOL='arch-vm-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-vm' /home/brandon/scripts/snap-lvm-fsarchive
+if ! FSAOPTS='-Z8 -j8' VOLGROP='fw16-vg' SNAPVOL='arch-vm2-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='arch-vm2' /home/brandon/scripts/snap-lvm-fsarchive
 then
-    echo "fsarchive exited with a fail status on arch-vm"
+    echo "fsarchive exited with a fail status on arch-vm2"
     RES=1
 fi
 
-if ! VOLGROP='fw16-vg' SNAPVOL='arch-vm-backup-snap' /home/brandon/scripts/snap-lvm-delete
+if ! VOLGROP='fw16-vg' SNAPVOL='arch-vm2-backup-snap' /home/brandon/scripts/snap-lvm-delete
 then
-    echo "unable to delete snap arch-vm-backup-snap"
+    echo "unable to delete snap arch-vm2-backup-snap"
     exit 1
 fi
 
-sha256sum "${BACKDIR}/arch-vm.fsa" > "${BACKDIR}/arch-vm.fsa.sha256"
+sha256sum "${BACKDIR}/arch-vm2.fsa" > "${BACKDIR}/arch-vm2.fsa.sha256"
 
 
 #####################################################
 ##
-## Updating backuptime
+## Update backuptime
 ##
 #####################################################
 

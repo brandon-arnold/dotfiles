@@ -36,13 +36,11 @@ output * resolution 2560x1600 bg /home/brandon/Pictures/Backgrounds/2560x1600.jp
 #               resume 'swaymsg "output * dpms on"' \
 #          before-sleep 'swaylock -f -c 000000'
          
-exec swayidle -w \
-         timeout 600 'swaymsg "output * dpms off"' \
-              resume 'swaymsg "output * dpms on"'
-#
-# This will lock your screen after 300 seconds of inactivity, then turn off
-# your displays after another 300 seconds, and turn your screens back on when
-# resumed. It will also lock your screen before your computer goes to sleep.
+# exec swayidle -w \
+#          timeout 600 'swaymsg "output * dpms off"' \
+#               resume 'swaymsg "output * dpms on"'
+
+# exec swayidle -w timeout 600 '/usr/bin/systemctl suspend'
 
 ### Input configuration
 #
@@ -214,10 +212,9 @@ bar {
 # Assign Emacs to Ctrl + Alt + 'e'
 bindsym Control+Mod1+e exec --no-startup-id edit
 
-# Dell keyboard function bindings
-bindsym XF86AudioRaiseVolume exec "pactl set-sink-volume 0 +10%"
-bindsym XF86AudioLowerVolume exec "pactl set-sink-volume 0 -10%"
-bindsym XF86AudioMute exec "pactl set-sink-mute 0 toggle"
+bindsym XF86AudioRaiseVolume exec "pactl set-sink-volume @DEFAULT_SINK@ +10%"
+bindsym XF86AudioLowerVolume exec "pactl set-sink-volume @DEFAULT_SINK@ -10%"
+bindsym XF86AudioMute exec "pactl set-sink-mute @DEFAULT_SINK@ toggle"
 # bindsym Num_Lock
 # bindsym Scroll_Lock
 # bindsym XF86Search
@@ -241,6 +238,10 @@ input 2362:628:PIXA3854:00_093A:0274_Touchpad {
 
 input 20547:21570:PloopyCo_Trackball_Mouse {
       pointer_accel -1
+}
+
+input 20547:23623:Ploopy_Corporation_Ploopy_Adept_Trackball_Mouse {
+      pointer_accel -0.5
 }
 
 # input 2362:628:PIXA3854:00_093A:0274_Mouse {
@@ -271,3 +272,6 @@ bindsym Alt+Control+Delete exec swaylock -f -c 000000
 exec --no-startup-id nm-applet
 exec --no-startup-id libinput-gestures
 exec --no-startup-id /usr/lib/mate-polkit/polkit-mate-authentication-agent-1
+
+# See https://wiki.archlinux.org/title/Sway#Manage_Sway-specific_daemons_with_systemd
+exec_always systemctl --user start sway-session.target

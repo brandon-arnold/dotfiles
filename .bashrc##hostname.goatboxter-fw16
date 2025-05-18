@@ -8,21 +8,3 @@ alias ls='ls --color=auto'
 PS1='[\u@\h \W]\$ '
 
 export TERM=xterm-256color
-
-export MAKEFLAGS="-j$(nproc)"
-
-export HISTCONTROL=ignorespace
-
-# export GDK_SCALE=1.75
-# export GDK_DPI_SCALE=1.75
-# export QT_AUTO_SCREEN_SCALE_FACTOR=1.75
-# export QT_SCALE_FACTOR=1.75
-# export LIBGL_ALWAYS_SOFTWARE="1"
-
-export LM_LICENSE_FILE=/home/brandon/LR-178013_License.dat
-export LM_LICENSE_FILE=/home/brandon/intelFPGA/LR-231771_License.dat
-export MGLS_LICENSE_FILE=/home/brandon/intelFPGA/LR-231771_License.dat
-
-export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
-
-export LATTICE_LICENSE_FILE=/home/brandon/opt/lscc/diamond/3.14/license/license.dat
