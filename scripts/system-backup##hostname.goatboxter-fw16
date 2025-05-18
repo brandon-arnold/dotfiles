@@ -4,7 +4,13 @@
 ##
 ## system-backup
 ## 
-## Takes an image backup of various partitions.
+## This script takes a live backup of the layout and filesystems. Set up a systemd
+##   service to run it daily and configure the parameters below.
+##
+## This script is also a README about how to restore. Perform restoration from an
+##   Arch Linux installation media. See sections below on commands to restore
+##   partition tables, LVM layout, and files (which includes filesystems and block
+##   IDs). Afterwards, chroot in and run `mkinitcpio`.
 ##
 #####################################################
 
@@ -51,7 +57,7 @@ mkdir ${BACKDIR}
 
 #####################################################
 ##
-## Include the current version of this backup for documentation
+## Include the current version of this backup script for documentation
 ##
 #####################################################
 
@@ -60,6 +66,8 @@ cp $(readlink -f "$0") "${BACKDIR}"
 #####################################################
 ##
 ## Back up partition table(s), LVM metadata, and block (filesystem) UUIDs
+##
+## --
 ##
 ## For restoration, use `sfdisk` to restore the partition tables, `pvcreate` and
 ##     `vgcfgrestore` to restore LVM, and `fsarchiver` to restore the filesystems.
@@ -74,7 +82,7 @@ cp $(readlink -f "$0") "${BACKDIR}"
 ##     new system.
 ##   - LVM UUIDs should match, too, which will be referenced by LVM itself and
 ##     possibly other systems backed up in the root and home volumes. After
-##     creating the LVM physical volume, use something like
+##     creating the LVM physical volumes, use something like
 ##     vgcfgrestore -f /path/to/etc-lvm-backup VOLUME_GROUP_NAME 
 ##     to get the LVM metadata synced up for free.
 ##   - Block/filesystem UUIDs will be important for the kernel to automount from
@@ -108,6 +116,10 @@ efibootmgr -v > "${BACKDIR}/efibootmgr.txt"
 ##
 ## Back up /boot
 ##
+## --
+##
+## Restore with fsarchiver to the new primary partition
+##
 #####################################################
 
 echo "backing up /boot: "$(date)
@@ -140,6 +152,10 @@ sha256sum "${BACKDIR}/boot.fsa" > "${BACKDIR}/boot.fsa.sha256"
 ##
 ## Back up /dev/fw16-vg/arch-root
 ##
+## --
+##
+## Restore with fsarchiver to the new logical volume
+##
 #####################################################
 
 echo "backing up arch-root: "$(date)
@@ -170,6 +186,10 @@ sha256sum "${BACKDIR}/arch-root.fsa" > "${BACKDIR}/arch-root.fsa.sha256"
 ##
 ## Back up /dev/fw16-vg/arch-home
 ##
+## --
+##
+## Restore with fsarchiver to the new logical volume
+##
 #####################################################
 
 echo "backing up arch-home: "$(date)
@@ -199,6 +219,10 @@ sha256sum "${BACKDIR}/arch-home.fsa" > "${BACKDIR}/arch-home.fsa.sha256"
 #####################################################
 ##
 ## Back up /dev/fw16-vg/arch-vm2
+##
+## --
+##
+## Restore with fsarchiver to the new logical volume
 ##
 #####################################################
 
