@@ -1,0 +1,5 @@
+#!/bin/bash
+
+VOLGROP='fw16-vg' SNAPVOL='arch-root-update-snap' /home/brandon/scripts/snap-lvm-revert
+VOLGROP='fw16-vg' SNAPVOL='arch-home-update-snap' /home/brandon/scripts/snap-lvm-revert
+VOLGROP='fw16-vg' SNAPVOL='arch-vm-update-snap' /home/brandon/scripts/snap-lvm-revert

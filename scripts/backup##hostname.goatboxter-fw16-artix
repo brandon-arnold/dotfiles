@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Backs up the entire system, excluding some volatile directories.
+
+# -a,--archive         archive mode is -rlptgoD (no -A,-X,-U,-N,-H)
+# -A,--acls            preserve ACLs
+# -X,--xattrs          preserve extended attributes
+# -l,--links           copy symlinks as symlinks
+# -v,--verbose         verbose
+# -e "...",--rsh="..." skips the y/N untrusted hosts message
+# --progress (and -v)  above gives useful logging history
+# --filter"-,p ..."    is a better way than --exclude to exclude directories
+#                      (see http://blog.mudflatsoftware.com/blog/2012/10/31/tricks-with-rsync-filter-rules/ )
+# --backup             make backups (see --suffix & --backup-dir)
+# --backup-dir="/extern/path/to/.rsync_bak_$(date +\%Y-\%m-\%d-\%H-\%M)"
+#                      make backups into hierarchy based in DIR
+# --delete             delete extraneous files from dest dirs
+# --delete-excluded    also delete excluded files from dest dirs
+
+rsync --archive \
+      --acls \
+      --xattrs \
+      --links \
+      --verbose \
+      -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes" \
+      --progress \
+      --filter="-,p /dev/*" \
+      --filter="-,p /home/brandon/.aws/*" \
+      --filter="-,p /home/brandon/.bna-private/*" \
+      --filter="-,p /home/brandon/.cache/*" \
+      --filter="-,p /home/brandon/.cache/google-chrome/*" \
+      --filter="-,p /home/brandon/.config/Slack/*" \
+      --filter="-,p /home/brandon/.config/google-chrome/*" \
+      --filter="-,p /home/brandon/.dropbox/*" \
+      --filter="-,p /home/brandon/.local/*" \
+      --filter="-,p /home/brandon/.npm/*" \
+      --filter="-,p /home/brandon/.ssh/*" \
+      --filter="-,p /home/brandon/.wine/*" \
+      --filter="-,p /home/brandon/Dropbox/*" \
+      --filter="-,p /home/brandon/Projects/mt-aws-glacier/*.log" \
+      --filter="-,p /home/brandon/VirtualBox\ VMs/*" \
+      --filter="-,p /home/brandon/vm/*" \
+      --filter="-,p /home/brandon/build/*" \
+      --filter="-,p /home/brandon/tmp/*" \
+      --filter="-,p /home/brandon/Downloads/*" \
+      --filter="-,p /home/brandon/steam/*" \
+      --filter="-,p /lost+found" \
+      --filter="-,p /media/*" \
+      --filter="-,p /mnt/*" \
+      --filter="-,p /proc/*" \
+      --filter="-,p /run/*" \
+      --filter="-,p /sys/*" \
+      --filter="-,p /tmp/*" \
+      --filter="-,p /var/cache/*" \
+      --filter="-,p /var/lib/*" \
+      --filter="-,p /var/tmp/*" \
+      --backup \
+      --backup-dir="/mnt/tank/brandon-backup-posix/goatboxter-fw16/.rsync_bak_$(date +\%Y-\%m-\%d-\%H-\%M)" \
+      --delete \
+      --delete-excluded \
+      / bkp9700@truenas.bant:/mnt/tank/brandon-backup-posix/goatboxter-fw16/rsync
