@@ -26,3 +26,8 @@ export LATTICE_LICENSE_FILE=/home/brandon/opt/lscc/diamond/3.14/license/license.
 
 export XDG_RUNTIME_DIR="/run/user/$UID"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+# export GBM_BACKEND=nvidia-drm
+# export __GLX_VENDOR_LIBRARY_NAME=nvidia
+# export WLR_NO_HARDWARE_CURSORS=1
+export WLR_DRM_DEVICES=/dev/dri/card2

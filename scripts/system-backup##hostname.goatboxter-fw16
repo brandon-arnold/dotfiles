@@ -4,18 +4,17 @@
 ##
 ## system-backup
 ## 
-## This script takes a live backup of the layout and filesystems. Set up a systemd
-##   service to run it daily and configure the parameters below.
+## This script takes a live backup of the `goatboxter-fw16` Framework Laptop 16
+##   layout and filesystems. 
 ##
-## This script is also a README about how to restore. Perform restoration from an
-##   Arch Linux installation media. See sections below on commands to restore
-##   partition tables, LVM layout, and files (which includes filesystems and block
-##   IDs). Afterwards, chroot in and run `mkinitcpio`.
+## The script is also a README about how to restore, assumedly from the Arch
+##   Linux installation media. See sections below on commands to restore partition
+##   tables, LVM layout, and files (which includes filesystems and block IDs).
+##   Afterwards, chroot in and run `mkinitcpio`.
 ##
 #####################################################
 
 BACKUP_ROOT_PATH="/mnt/backup/"
-BACKUP_SECONDARY_ROOT_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
 DAYS_BETWEEN_BACKUPS=6
 MAX_BACKUP_AGE_DAYS=13
 
@@ -61,7 +60,7 @@ mkdir ${BACKDIR}
 ##
 #####################################################
 
-cp $(readlink -f "$0") "${BACKDIR}"
+cp $(readlink -f "$0") "${BACKDIR}/README"
 
 #####################################################
 ##
@@ -98,9 +97,11 @@ cp $(readlink -f "$0") "${BACKDIR}"
 # includes PARTUUIDs
 sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b474d80be > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b474d80be.txt"
 sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4cb006fd > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b4cb006fd.txt"
+
 # includes LVM UUIDs
 cp /etc/lvm/backup/fw16-vg "${BACKDIR}/etc-lvm-backup-fw16-vg"
 cp /etc/lvm/backup/fw16-2-vg "${BACKDIR}/etc-lvm-backup-fw16-2-vg"
+
 # includes filesystem UUIDs
 blkid > "${BACKDIR}/blkid.txt"
 
@@ -118,7 +119,7 @@ efibootmgr -v > "${BACKDIR}/efibootmgr.txt"
 ##
 ## --
 ##
-## Restore with fsarchiver to the new primary partition
+## When restoring, use `fsarchiver` pointed at the new primary partition
 ##
 #####################################################
 
@@ -154,7 +155,7 @@ sha256sum "${BACKDIR}/boot.fsa" > "${BACKDIR}/boot.fsa.sha256"
 ##
 ## --
 ##
-## Restore with fsarchiver to the new logical volume
+## When restoring, use `fsarchiver` pointed at the new logical volume
 ##
 #####################################################
 
@@ -188,7 +189,7 @@ sha256sum "${BACKDIR}/arch-root.fsa" > "${BACKDIR}/arch-root.fsa.sha256"
 ##
 ## --
 ##
-## Restore with fsarchiver to the new logical volume
+## When restoring, use `fsarchiver` pointed at the new logical volume
 ##
 #####################################################
 
@@ -222,7 +223,7 @@ sha256sum "${BACKDIR}/arch-home.fsa" > "${BACKDIR}/arch-home.fsa.sha256"
 ##
 ## --
 ##
-## Restore with fsarchiver to the new logical volume
+## When restoring, use `fsarchiver` pointed at the new logical volume
 ##
 #####################################################
 
@@ -264,22 +265,6 @@ else
     echo "error with backup; exiting without updating backuptime: "$(date)
     exit ${RES}
 fi
-
-#####################################################
-##
-## COPY backup to secondary path
-##
-#####################################################
-# SECONDARYBACKDIR="${BACKUP_SECONDARY_ROOT_PATH}${TIMESTAMP}"
-
-# echo "copying backup to secondary path"
-# if mkdir ${SECONDARYBACKDIR} ; then
-#     cp -fR ${BACKDIR}/* ${SECONDARYBACKDIR}
-# else
-#     echo "unable to copy backup to secondary path"
-#     echo "failed to mkdir ${SECONDARYBACKDIR}"
-#     RES=1
-# fi
 
 echo "finished: "$(date)
 

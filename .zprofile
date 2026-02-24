@@ -1,6 +1,20 @@
 # User PATH
 typeset -U path
-path=(/opt/rocm/bin ~/opt/altera/24.1std/quartus/bin ~/opt/altera/24.1std/questa_fe/bin ~/bin ~/scripts /usr/local/go/bin /home/brandon/.local/bin /home/brandon/opt/lscc/diamond/3.14/bin/lin64/ $path[@])
+path=(~/opt/altera/24.1std/questa_fe/bin /opt/rocm/bin ~/bin ~/scripts /usr/local/go/bin /home/brandon/.local/bin /home/brandon/opt/lscc/diamond/3.14/bin/lin64/ $path[@])
+
+quartus-17lite() {
+    path=(${path:#*altera/*/quartus/bin})
+    path=(~/opt/altera/17.0lite/quartus/bin $path[@])
+    export QSYS_ROOTDIR="/home/brandon/opt/altera/17.0lite/quartus/sopc_builder/bin"
+}
+
+quartus-24() {
+    path=(${path:#*altera/*/quartus/bin})
+    path=(~/opt/altera/24.1std/quartus/bin $path[@])
+    export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
+}
+
+quartus-17lite
 
 # Hex to decimal, decimal to hex. Ex:
 # $ h2d FF
@@ -57,4 +71,3 @@ alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules --enabl
 
 export PATH=$PATH:$(npm get prefix)/bin
 
-export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
