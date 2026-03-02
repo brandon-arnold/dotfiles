@@ -1,0 +1,65 @@
+#!/bin/bash
+
+#####################################################
+##
+## system-backup-nas-sync
+##
+## Syncs local system image backups from /mnt/backup/ to the NAS.
+## Designed to be run on a timer independently from system-backup.
+## Tolerates the NAS being offline (exits cleanly).
+##
+#####################################################
+
+LOCAL_BACKUP_PATH="/mnt/backup/"
+NAS_BACKUP_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
+NAS_MOUNTPOINT="/mnt/nas-brandon"
+
+echo "system-backup-nas-sync on $(date)"
+
+#####################################################
+##
+## Check that the NAS is mounted
+##
+#####################################################
+
+if ! mountpoint -q "${NAS_MOUNTPOINT}"; then
+    echo "NAS is not mounted at ${NAS_MOUNTPOINT}, skipping sync"
+    exit 0
+fi
+
+#####################################################
+##
+## Check that local backup path exists
+##
+#####################################################
+
+if [ ! -d "${LOCAL_BACKUP_PATH}" ]; then
+    echo "Local backup path ${LOCAL_BACKUP_PATH} does not exist"
+    exit 1
+fi
+
+#####################################################
+##
+## Sync backup directories to NAS
+##
+## - Only syncs timestamped backup dirs (20*)
+## - Does NOT delete from NAS (infinite NAS retention)
+## - Partial transfers are resumable via --partial
+##
+#####################################################
+
+rsync -av --partial \
+    --include='20*/' \
+    --include='20*/**' \
+    --exclude='*' \
+    "${LOCAL_BACKUP_PATH}" "${NAS_BACKUP_PATH}"
+
+RSYNC_EXIT=$?
+
+if [ ${RSYNC_EXIT} -ne 0 ]; then
+    echo "rsync failed with exit code ${RSYNC_EXIT}: $(date)"
+    exit 1
+fi
+
+echo "finished: $(date)"
+exit 0
