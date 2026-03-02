@@ -1,11 +1,17 @@
 # User PATH
 typeset -U path
-path=(~/opt/altera/24.1std/questa_fe/bin /opt/rocm/bin ~/bin ~/scripts /usr/local/go/bin /home/brandon/.local/bin /home/brandon/opt/lscc/diamond/3.14/bin/lin64/ $path[@])
+path=(~/.bun/bin ~/opt/altera/24.1std/questa_fe/bin /opt/rocm/bin ~/bin ~/scripts /usr/local/go/bin /home/brandon/.local/bin /home/brandon/opt/lscc/diamond/3.14/bin/lin64/ $path[@])
 
 quartus-17lite() {
     path=(${path:#*altera/*/quartus/bin})
     path=(~/opt/altera/17.0lite/quartus/bin $path[@])
     export QSYS_ROOTDIR="/home/brandon/opt/altera/17.0lite/quartus/sopc_builder/bin"
+}
+
+quartus-17() {
+    path=(${path:#*altera/*/quartus/bin})
+    path=(~/opt/altera/17.0std/quartus/bin $path[@])
+    export QSYS_ROOTDIR="/home/brandon/opt/altera/17.0std/quartus/sopc_builder/bin"
 }
 
 quartus-24() {
@@ -14,7 +20,7 @@ quartus-24() {
     export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
 }
 
-quartus-17lite
+quartus-17
 
 # Hex to decimal, decimal to hex. Ex:
 # $ h2d FF

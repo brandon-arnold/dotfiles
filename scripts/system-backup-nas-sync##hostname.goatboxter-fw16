@@ -13,6 +13,7 @@
 LOCAL_BACKUP_PATH="/mnt/backup/"
 NAS_BACKUP_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
 NAS_MOUNTPOINT="/mnt/nas-brandon"
+MAX_NAS_BACKUPS=16
 
 echo "system-backup-nas-sync on $(date)"
 
@@ -43,7 +44,6 @@ fi
 ## Sync backup directories to NAS
 ##
 ## - Only syncs timestamped backup dirs (20*)
-## - Does NOT delete from NAS (infinite NAS retention)
 ## - Partial transfers are resumable via --partial
 ##
 #####################################################
@@ -59,6 +59,26 @@ RSYNC_EXIT=$?
 if [ ${RSYNC_EXIT} -ne 0 ]; then
     echo "rsync failed with exit code ${RSYNC_EXIT}: $(date)"
     exit 1
+fi
+
+#####################################################
+##
+## Delete oldest NAS backups beyond MAX_NAS_BACKUPS
+##
+#####################################################
+
+NAS_DIRS=$(find "${NAS_BACKUP_PATH}" -maxdepth 1 -type d -name '20*' -printf '%f\n' | sort)
+NAS_COUNT=$(echo "${NAS_DIRS}" | grep -c .)
+
+if [ "${NAS_COUNT}" -gt "${MAX_NAS_BACKUPS}" ]; then
+    DELETE_COUNT=$(( NAS_COUNT - MAX_NAS_BACKUPS ))
+    echo "Found ${NAS_COUNT} backups on NAS, removing ${DELETE_COUNT} oldest"
+    echo "${NAS_DIRS}" | head -n ${DELETE_COUNT} | while read -r DIR; do
+        echo "Deleting ${NAS_BACKUP_PATH}${DIR}"
+        rm -rf "${NAS_BACKUP_PATH}${DIR}"
+    done
+else
+    echo "Found ${NAS_COUNT} backups on NAS, within limit of ${MAX_NAS_BACKUPS}"
 fi
 
 echo "finished: $(date)"

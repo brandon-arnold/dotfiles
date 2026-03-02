@@ -35,8 +35,8 @@ if [[ -z "${TS_FILE}" || -z "${SECONDS_TO_WAIT}" ]]; then
 fi
 
 if ! test -f "${TS_FILE}"; then
-    echo "${TS_FILE} does not exist"
-    exit 1
+    echo "${TS_FILE} does not exist, proceeding"
+    exit 0
 fi
 
 CURDATE=$(date +%s)

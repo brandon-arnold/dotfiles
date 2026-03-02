@@ -1,6 +1,7 @@
 [[ -f ~/.bashrc ]] && . ~/.bashrc
 
 export PATH="/home/brandon/.ebcli-virtual-env/executables:$PATH"
+export PATH="/home/brandon/.bun/bin:$PATH"
 
 export MAKEFLAGS="-j$(nproc)"
 
@@ -22,3 +23,13 @@ export LATTICE_LICENSE_FILE=/home/brandon/opt/lscc/diamond/3.14/license/license.
 
 export XDG_RUNTIME_DIR="/run/user/$UID"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+# Set NPM_PACKAGES environment variable
+NPM_PACKAGES="${HOME}/.npm-packages"
+# Add to PATH
+PATH="$NPM_PACKAGES/bin:$PATH"
+# Ensure node can find modules (optional, but helpful)
+NODE_PATH="$NPM_PACKAGES/lib/node_modules:$NODE_PATH"
+# Update man pages (optional)
+unset MANPATH # delete if you already modified MANPATH elsewhere in your config
+MANPATH="$NPM_PACKAGES/share/man:$(manpath)"
