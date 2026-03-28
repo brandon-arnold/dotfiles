@@ -18,6 +18,18 @@ BACKUP_ROOT_PATH="/mnt/backup/"
 DAYS_BETWEEN_BACKUPS=6
 MAX_BACKUP_AGE_DAYS=13
 
+cleanup() {
+    # Re-mount /boot if we unmounted it
+    if [ "${UNMOUNTED_BOOT:-0}" -eq 1 ] && ! mountpoint -q /boot; then
+        mount /boot
+    fi
+    # Remove any leftover snapshots
+    TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
+    TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
+    TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-vm2-backup-snap' /home/brandon/scripts/snap-lvm-delete
+}
+trap cleanup EXIT
+
 #####################################################
 ##
 ## Check if enough time has elapsed since last backup
@@ -74,21 +86,25 @@ cp $(readlink -f "$0") "${BACKDIR}/README"
 ## Note on UUIDs: there are partition UUIDs (PARTUUIDs), LVM UUIDs, and filesystem UUIDs.
 ##
 ##   - Partition UUIDs will be important for the EFI NVRAM to find the rEFInd boot
-##     partition and for the boot loader to find the swap and LVM partitions. Use
-##     gdisk(8) to modify the PARTUUIDs on a new system to match, or `efibootmgr`
-##     to do the reverse (update the UUID in the NVRAM entry); in both cases--
-##     especially the second--run mkinitcpio and initramfs when restoring the
-##     new system.
+##     partition and for the boot loader to find the swap and LVM partitions.
+##     The easiest restore path is `sfdisk`, which preserves PARTUUIDs from the
+##     dump automatically. Alternatively, use gdisk(8) to set PARTUUIDs on a new
+##     system to match, or `efibootmgr` to update the NVRAM entry to point at the
+##     new PARTUUID. Run mkinitcpio on the restored system regardless (to match
+##     new hardware).
 ##   - LVM UUIDs should match, too, which will be referenced by LVM itself and
 ##     possibly other systems backed up in the root and home volumes. After
-##     creating the LVM physical volumes, use something like
-##     vgcfgrestore -f /path/to/etc-lvm-backup VOLUME_GROUP_NAME 
-##     to get the LVM metadata synced up for free.
+##     creating the LVM physical volumes with `pvcreate`, use
+##     vgcfgrestore -f /path/to/etc-lvm-backup VOLUME_GROUP_NAME
+##     to restore VG, LV, and PV UUIDs from the metadata.
 ##   - Block/filesystem UUIDs will be important for the kernel to automount from
 ##     the /etc/fstab entry. `fsarchiver` is used to back up filesystems,
 ##     and its corresponding restoration should bring back the block UUIDs for
-##     free. If you need to do it manually, use mlabel(1) to modify them to match
-##     /etc/fstab, or do the reverse by updating /etc/fstab to the new UUIDs.
+##     free. If you need to do it manually, use tune2fs(8) -U for ext4 or
+##     mlabel(1) for FAT, or do the reverse by updating /etc/fstab to the new
+##     UUIDs.
+##   - Swap UUID is referenced in /etc/fstab but is not captured by fsarchiver.
+##     On restore, use `mkswap -U <original-uuid>` (extract from blkid.txt).
 ##
 ## See inline comments on which steps back up each UUID type.
 ##
@@ -126,12 +142,12 @@ efibootmgr -v > "${BACKDIR}/efibootmgr.txt"
 echo "backing up /boot: "$(date)
 
 if mountpoint -q /boot; then
-    MOUNTED_BOOT=1
     if ! umount /boot
     then
         echo "unable to unmount /boot"
         exit 1
     fi
+    UNMOUNTED_BOOT=1
 fi
 
 if ! fsarchiver savefs -Z8 -j8 "${BACKDIR}/boot.fsa" /dev/disk/by-uuid/5F7D-3EB0
@@ -140,14 +156,15 @@ then
     RES=1
 fi
 
-if [ "$MOUNTED_BOOT" -eq "1" ]; then
+if [ "${UNMOUNTED_BOOT:-0}" -eq 1 ]; then
     if ! mount /boot; then
         echo "unable to mount /boot"
         exit 1
     fi
+    UNMOUNTED_BOOT=0
 fi
 
-sha256sum "${BACKDIR}/boot.fsa" > "${BACKDIR}/boot.fsa.sha256"
+(cd "${BACKDIR}" && sha256sum boot.fsa > boot.fsa.sha256)
 
 #####################################################
 ##
@@ -175,13 +192,9 @@ then
     RES=1
 fi
 
-if ! VOLGROP='fw16-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
-then
-    echo "unable to delete snap arch-root-backup-snap"
-    exit 1
-fi
+VOLGROP='fw16-vg' SNAPVOL='arch-root-backup-snap' /home/brandon/scripts/snap-lvm-delete
 
-sha256sum "${BACKDIR}/arch-root.fsa" > "${BACKDIR}/arch-root.fsa.sha256"
+(cd "${BACKDIR}" && sha256sum arch-root.fsa > arch-root.fsa.sha256)
 
 #####################################################
 ##
@@ -209,13 +222,9 @@ then
     RES=1
 fi
 
-if ! VOLGROP='fw16-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
-then
-    echo "unable to delete snap arch-root-home-snap"
-    exit 1
-fi
+VOLGROP='fw16-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
 
-sha256sum "${BACKDIR}/arch-home.fsa" > "${BACKDIR}/arch-home.fsa.sha256"
+(cd "${BACKDIR}" && sha256sum arch-home.fsa > arch-home.fsa.sha256)
 
 #####################################################
 ##
@@ -243,13 +252,9 @@ then
     RES=1
 fi
 
-if ! VOLGROP='fw16-vg' SNAPVOL='arch-vm2-backup-snap' /home/brandon/scripts/snap-lvm-delete
-then
-    echo "unable to delete snap arch-vm2-backup-snap"
-    exit 1
-fi
+VOLGROP='fw16-vg' SNAPVOL='arch-vm2-backup-snap' /home/brandon/scripts/snap-lvm-delete
 
-sha256sum "${BACKDIR}/arch-vm2.fsa" > "${BACKDIR}/arch-vm2.fsa.sha256"
+(cd "${BACKDIR}" && sha256sum arch-vm2.fsa > arch-vm2.fsa.sha256)
 
 
 #####################################################

@@ -1,6 +1,6 @@
 * {
-    /* `otf-font-awesome` is required to be installed for icons */
-    font-family: FontAwesome, Roboto, Helvetica, Arial, sans-serif;
+    /* `otf-font-awesome` and `otf-firamono-nerd` is required to be installed for icons */
+    font-family: Hack, "Font Awesome 7 Free", "FiraMono Nerd Font Propo", "FiraCode Nerd Font Propo", FontAwesome, Roboto, Helvetica, Arial, sans-serif;
     font-size: 26px;
 }
 

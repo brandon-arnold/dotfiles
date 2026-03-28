@@ -286,6 +286,7 @@ exec --no-startup-id libinput-gestures
 exec --no-startup-id /usr/lib/mate-polkit/polkit-mate-authentication-agent-1
 exec --no-startup-id wlsunset -l 47.6 -L -122.3
 exec --no-startup-id easyeffects
+exec --no-startup-id blueman-applet
 
 # See https://wiki.archlinux.org/title/Sway#Manage_Sway-specific_daemons_with_systemd
 exec_always systemctl --user start sway-session.target
