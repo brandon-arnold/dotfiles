@@ -1,0 +1,101 @@
+#!/bin/bash
+
+# Backs up bant-node (truenas-knode.bant) via rsync to TrueNAS.
+# Runs as root on bant-node. No LVM snapshots needed — single root partition,
+# low-activity server.
+#
+# Target: bkpbantnode@192.168.1.201:/mnt/tank/backup-posix-bant-node/rsync
+
+DEST="bkpbantnode@192.168.1.201:/mnt/tank/backup-posix-bant-node/rsync"
+TRUENAS_API_KEY=$(cat /root/.bna-private/truenas-api-key 2>/dev/null)
+RES=0
+
+echo "backup rsync on $(date)"
+
+# Check if NAS is reachable
+if ! ssh -o BatchMode=yes -o ConnectTimeout=10 bkpbantnode@192.168.1.201 true 2>/dev/null; then
+    echo "NAS unreachable, skipping backup"
+    exit 0
+fi
+
+# Take a remote ZFS snapshot on the NAS before syncing
+if [ -n "${TRUENAS_API_KEY}" ]; then
+    SNAP_NAME="pre-rsync-$(date +%Y-%m-%d_%H-%M)"
+    echo "creating pre-sync snapshot: ${SNAP_NAME}"
+    curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
+        -X POST "https://192.168.1.201/api/v2.0/pool/snapshot" \
+        -H "Content-Type: application/json" \
+        -d "{\"dataset\": \"tank/backup-posix-bant-node\", \"name\": \"${SNAP_NAME}\", \"recursive\": false}" \
+        || echo "WARNING: snapshot creation failed, continuing anyway"
+    echo ""
+else
+    echo "WARNING: could not retrieve TrueNAS API key, skipping snapshot"
+fi
+
+echo "starting rsync: $(date)"
+
+MAX_RETRIES=3
+RETRY=0
+
+while [ ${RETRY} -lt ${MAX_RETRIES} ]; do
+
+rsync --archive \
+      --acls \
+      --xattrs \
+      --links \
+      --verbose \
+      -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3" \
+      --progress \
+      --filter="-,p /dev/*" \
+      --filter="-,p /proc/*" \
+      --filter="-,p /run/*" \
+      --filter="-,p /sys/*" \
+      --filter="-,p /tmp/*" \
+      --filter="-,p /lost+found" \
+      --filter="-,p /mnt/*" \
+      --filter="-,p /var/cache/*" \
+      --filter="-,p /var/tmp/*" \
+      --filter="-,p /var/lib/docker/*" \
+      --delete \
+      --delete-excluded \
+      / "${DEST}"
+
+RES=$?
+
+if [ ${RES} -eq 0 ]; then
+    break
+fi
+
+RETRY=$((RETRY + 1))
+if [ ${RETRY} -lt ${MAX_RETRIES} ]; then
+    echo "rsync failed (exit ${RES}), retry ${RETRY}/${MAX_RETRIES} in 30s: $(date)"
+    sleep 30
+fi
+
+done
+
+# Prune pre-rsync snapshots older than 180 days
+if [ -n "${TRUENAS_API_KEY}" ]; then
+    echo "pruning snapshots older than 180 days: $(date)"
+    CUTOFF=$(date -d "180 days ago" +%s)
+    curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
+        "https://192.168.1.201/api/v2.0/pool/snapshot?limit=500" 2>/dev/null \
+    | python3 -c "
+import sys, json
+cutoff = int(sys.argv[1])
+data = json.load(sys.stdin)
+for s in data:
+    if s['dataset'] == 'tank/backup-posix-bant-node' and s['snapshot_name'].startswith('pre-rsync-'):
+        created = int(s['properties']['creation']['rawvalue'])
+        if created < cutoff:
+            print(s['id'])
+" "${CUTOFF}" | while read -r SNAP_ID; do
+        echo "  deleting: ${SNAP_ID}"
+        curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
+            -X DELETE "https://192.168.1.201/api/v2.0/pool/snapshot/id/$(python3 -c "import urllib.parse; print(urllib.parse.quote('''${SNAP_ID}''', safe=''))")" \
+            || echo "  WARNING: failed to delete ${SNAP_ID}"
+    done
+fi
+
+echo "finished: $(date)"
+exit ${RES}
