@@ -23,7 +23,7 @@ if [ -n "${TRUENAS_API_KEY}" ]; then
     SNAP_NAME="pre-rsync-$(date +%Y-%m-%d_%H-%M)"
     echo "creating pre-sync snapshot: ${SNAP_NAME}"
     curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
-        -X POST "https://192.168.1.201/api/v2.0/pool/snapshot" \
+        -X POST "https://truenas.bant/api/v2.0/pool/snapshot" \
         -H "Content-Type: application/json" \
         -d "{\"dataset\": \"tank/backup-posix-bant-node\", \"name\": \"${SNAP_NAME}\", \"recursive\": false}" \
         || echo "WARNING: snapshot creation failed, continuing anyway"
@@ -79,7 +79,7 @@ if [ -n "${TRUENAS_API_KEY}" ]; then
     echo "pruning snapshots older than 180 days: $(date)"
     CUTOFF=$(date -d "180 days ago" +%s)
     curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
-        "https://192.168.1.201/api/v2.0/pool/snapshot?limit=500" 2>/dev/null \
+        "https://truenas.bant/api/v2.0/pool/snapshot?limit=500" 2>/dev/null \
     | python3 -c "
 import sys, json
 cutoff = int(sys.argv[1])
@@ -92,7 +92,7 @@ for s in data:
 " "${CUTOFF}" | while read -r SNAP_ID; do
         echo "  deleting: ${SNAP_ID}"
         curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
-            -X DELETE "https://192.168.1.201/api/v2.0/pool/snapshot/id/$(python3 -c "import urllib.parse; print(urllib.parse.quote('''${SNAP_ID}''', safe=''))")" \
+            -X DELETE "https://truenas.bant/api/v2.0/pool/snapshot/id/$(python3 -c "import urllib.parse; print(urllib.parse.quote('''${SNAP_ID}''', safe=''))")" \
             || echo "  WARNING: failed to delete ${SNAP_ID}"
     done
 fi
