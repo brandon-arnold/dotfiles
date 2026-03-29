@@ -54,7 +54,7 @@ rsync --archive \
       --filter="-,p /var/lib/*" \
       --filter="-,p /var/tmp/*" \
       --backup \
-      --backup-dir="/mnt/tank/brandon-backup-posix/goatboxter-9700/.rsync_bak_$(date +\%Y-\%m-\%d-\%H-\%M)" \
+      --backup-dir="/mnt/tank/backups/files/goatboxter-9700/.rsync_bak_$(date +\%Y-\%m-\%d-\%H-\%M)" \
       --delete \
       --delete-excluded \
-      / bkp9700@truenas.bant:/mnt/tank/brandon-backup-posix/goatboxter-9700/rsync
+      / bkp9700@truenas.bant:/mnt/tank/backups/files/goatboxter-9700/rsync

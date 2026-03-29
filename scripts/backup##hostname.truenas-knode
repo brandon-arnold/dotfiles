@@ -4,9 +4,9 @@
 # Runs as root on bant-node. No LVM snapshots needed — single root partition,
 # low-activity server.
 #
-# Target: bkpbantnode@192.168.1.201:/mnt/tank/backup-posix-bant-node/rsync
+# Target: bkpbantnode@192.168.1.201:/mnt/tank/backups/files/bant-node/rsync
 
-DEST="bkpbantnode@192.168.1.201:/mnt/tank/backup-posix-bant-node/rsync"
+DEST="bkpbantnode@192.168.1.201:/mnt/tank/backups/files/bant-node/rsync"
 TRUENAS_API_KEY=$(cat /root/.bna-private/truenas-api-key 2>/dev/null)
 RES=0
 
@@ -25,7 +25,7 @@ if [ -n "${TRUENAS_API_KEY}" ]; then
     curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
         -X POST "https://truenas.bant/api/v2.0/pool/snapshot" \
         -H "Content-Type: application/json" \
-        -d "{\"dataset\": \"tank/backup-posix-bant-node\", \"name\": \"${SNAP_NAME}\", \"recursive\": false}" \
+        -d "{\"dataset\": \"tank/backups/files/bant-node\", \"name\": \"${SNAP_NAME}\", \"recursive\": false}" \
         || echo "WARNING: snapshot creation failed, continuing anyway"
     echo ""
 else
@@ -85,7 +85,7 @@ import sys, json
 cutoff = int(sys.argv[1])
 data = json.load(sys.stdin)
 for s in data:
-    if s['dataset'] == 'tank/backup-posix-bant-node' and s['snapshot_name'].startswith('pre-rsync-'):
+    if s['dataset'] == 'tank/backups/files/bant-node' and s['snapshot_name'].startswith('pre-rsync-'):
         created = int(s['properties']['creation']['rawvalue'])
         if created < cutoff:
             print(s['id'])

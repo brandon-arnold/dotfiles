@@ -53,7 +53,7 @@ if [ -n "${TRUENAS_API_KEY}" ]; then
     curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
         -X POST "https://truenas.bant/api/v2.0/pool/snapshot" \
         -H "Content-Type: application/json" \
-        -d "{\"dataset\": \"tank/brandon-backup-posix\", \"name\": \"${SNAP_NAME}\", \"recursive\": false}" \
+        -d "{\"dataset\": \"tank/backups/files/goatboxter-fw16\", \"name\": \"${SNAP_NAME}\", \"recursive\": false}" \
         || echo "WARNING: snapshot creation failed, continuing anyway"
     echo ""
 else
@@ -140,7 +140,7 @@ rsync --archive \
       --filter="-,p /var/tmp/*" \
       --delete \
       --delete-excluded \
-      "${SNAP_MNT}/" bkp9700@truenas.bant:/mnt/tank/brandon-backup-posix/goatboxter-fw16/rsync
+      "${SNAP_MNT}/" bkp9700@truenas.bant:/mnt/tank/backups/files/goatboxter-fw16/goatboxter-fw16/rsync
 
 RES=$?
 
@@ -167,7 +167,7 @@ import sys, json
 cutoff = int(sys.argv[1])
 data = json.load(sys.stdin)
 for s in data:
-    if s['dataset'] == 'tank/brandon-backup-posix' and s['snapshot_name'].startswith('pre-rsync-'):
+    if s['dataset'] == 'tank/backups/files/goatboxter-fw16' and s['snapshot_name'].startswith('pre-rsync-'):
         created = int(s['properties']['creation']['rawvalue'])
         if created < cutoff:
             print(s['id'])
