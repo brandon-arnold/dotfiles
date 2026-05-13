@@ -17,7 +17,10 @@ set $menu wofi --show=drun
 #
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
 # output * resolution 3840x2160 bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill scale 2
-output * resolution 2560x1600 bg /home/brandon/Pictures/Backgrounds/2560x1600.jpg fill
+output * bg /home/brandon/Pictures/Backgrounds/2560x1600.jpg fill
+
+# Per-output scaling (laptop vs externals)
+include ~/.config/sway/outputs
 #
 # Example configuration:
 #

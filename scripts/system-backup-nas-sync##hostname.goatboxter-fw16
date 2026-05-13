@@ -4,27 +4,29 @@
 ##
 ## system-backup-nas-sync
 ##
-## Syncs local system image backups from /mnt/backup/ to the NAS.
+## Syncs local system image backups from /mnt/backup/ to the NAS
+## via rsync over SSH (bkp9700@truenas.bant).
+##
 ## Designed to be run on a timer independently from system-backup.
 ## Tolerates the NAS being offline (exits cleanly).
 ##
 #####################################################
 
 LOCAL_BACKUP_PATH="/mnt/backup/"
-NAS_BACKUP_PATH="/mnt/nas-brandon/PcBackup/goatboxter-fw16/"
-NAS_MOUNTPOINT="/mnt/nas-brandon"
-MAX_NAS_BACKUPS=16
+NAS_HOST="bkp9700@truenas.bant"
+NAS_BACKUP_PATH="/mnt/tank/backups/images/goatboxter-fw16/"
+MAX_NAS_BACKUPS=26
 
 echo "system-backup-nas-sync on $(date)"
 
 #####################################################
 ##
-## Check that the NAS is mounted
+## Check that the NAS is reachable via SSH
 ##
 #####################################################
 
-if ! mountpoint -q "${NAS_MOUNTPOINT}"; then
-    echo "NAS is not mounted at ${NAS_MOUNTPOINT}, skipping sync"
+if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "${NAS_HOST}" true 2>/dev/null; then
+    echo "NAS is not reachable via SSH (${NAS_HOST}), skipping sync"
     exit 0
 fi
 
@@ -48,15 +50,18 @@ fi
 ##
 #####################################################
 
-rsync -av --partial \
+rsync -rltv --omit-dir-times --partial --bwlimit=40m \
     --include='20*/' \
     --include='20*/**' \
     --exclude='*' \
-    "${LOCAL_BACKUP_PATH}" "${NAS_BACKUP_PATH}"
+    -e "ssh -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3" \
+    "${LOCAL_BACKUP_PATH}" "${NAS_HOST}:${NAS_BACKUP_PATH}"
 
 RSYNC_EXIT=$?
 
-if [ ${RSYNC_EXIT} -ne 0 ]; then
+if [ ${RSYNC_EXIT} -eq 23 ]; then
+    echo "rsync completed with warnings (code 23, likely permission issues on existing files): $(date)"
+elif [ ${RSYNC_EXIT} -ne 0 ]; then
     echo "rsync failed with exit code ${RSYNC_EXIT}: $(date)"
     exit 1
 fi
@@ -67,7 +72,8 @@ fi
 ##
 #####################################################
 
-NAS_DIRS=$(find "${NAS_BACKUP_PATH}" -maxdepth 1 -type d -name '20*' -printf '%f\n' | sort)
+NAS_DIRS=$(ssh -o BatchMode=yes "${NAS_HOST}" \
+    "find '${NAS_BACKUP_PATH}' -maxdepth 1 -type d -name '20*' -printf '%f\n'" | sort)
 NAS_COUNT=$(echo "${NAS_DIRS}" | grep -c .)
 
 if [ "${NAS_COUNT}" -gt "${MAX_NAS_BACKUPS}" ]; then
@@ -75,7 +81,7 @@ if [ "${NAS_COUNT}" -gt "${MAX_NAS_BACKUPS}" ]; then
     echo "Found ${NAS_COUNT} backups on NAS, removing ${DELETE_COUNT} oldest"
     echo "${NAS_DIRS}" | head -n ${DELETE_COUNT} | while read -r DIR; do
         echo "Deleting ${NAS_BACKUP_PATH}${DIR}"
-        rm -rf "${NAS_BACKUP_PATH}${DIR}"
+        ssh -o BatchMode=yes "${NAS_HOST}" "rm -rf '${NAS_BACKUP_PATH}${DIR}'"
     done
 else
     echo "Found ${NAS_COUNT} backups on NAS, within limit of ${MAX_NAS_BACKUPS}"

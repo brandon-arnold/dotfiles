@@ -27,8 +27,8 @@ background = "0x000000"
 foreground = "0xd0d0d0"
 
 [font]
-size = 15.0
-# 20.0 for laptop screen, 15.0 for office screens
+size = 12.0
+# sway output scale handles per-monitor sizing now
 
 [font.normal]
 family = "monospace"

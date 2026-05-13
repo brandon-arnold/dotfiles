@@ -1,37 +1,37 @@
 profile mobile {
-        output eDP-2 enable
+        output eDP-1 enable scale 1.3
 }
 
 profile external_monitors_connected {
-        output eDP-2 disable
+        output eDP-1 disable
         output DP-1 enable mode 2560x1440 position 0,0
         output DP-5 enable mode 2560x1440 position 2560,0
 }
 
 profile external_monitors_connected_2 {
-        output eDP-2 disable
+        output eDP-1 disable
         output DP-4 enable mode 2560x1440 position 0,0
         output DP-3 enable mode 2560x1440 position 2560,0
 }
 
 profile external_monitor_1_connected {
-        output eDP-2 disable
+        output eDP-1 disable
         output DP-1 enable mode 2560x1440 position 0,0
 }
 
 profile external_monitor_2_connected {
-        output eDP-2 disable
+        output eDP-1 disable
         output DP-5 enable mode 2560x1440 position 0,0
 }
 
 profile anker_575_dock {
-	output eDP-2 disable
+	output eDP-1 disable
 	output DP-11 enable mode 2560x1440 position 0,0
 	output DP-10 enable mode 2560x1440 position 2560,0
 }
 
 profile anker_575_dock2 {
-	output eDP-2 disable
+	output eDP-1 disable
 	output DP-13 enable mode 2560x1440 position 0,0
 	output DP-12 enable mode 2560x1440 position 2560,0
 }
