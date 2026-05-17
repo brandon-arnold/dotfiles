@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily personal file backup (curated zn-fpga store -> TrueNAS)
+
+[Timer]
+# 03:30 daily -- offset clear of the 02:00 system image backup window.
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -6,9 +6,8 @@
 # -A,--acls            preserve ACLs
 # -X,--xattrs          preserve extended attributes
 # -l,--links           copy symlinks as symlinks
-# -v,--verbose         verbose
+# --info=stats2        per-run transfer summary only (no per-file journal spam)
 # -e "...",--rsh="..." skips the y/N untrusted hosts message
-# --progress (and -v)  above gives useful logging history
 # --filter"-,p ..."    is a better way than --exclude to exclude directories
 #                      (see http://blog.mudflatsoftware.com/blog/2012/10/31/tricks-with-rsync-filter-rules/ )
 # --backup             make backups (see --suffix & --backup-dir)
@@ -97,9 +96,8 @@ rsync --archive \
       --acls \
       --xattrs \
       --links \
-      --verbose \
+      --info=stats2 \
       -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3" \
-      --progress \
       --filter="-,p /dev/*" \
       --filter="-,p /home/brandon/.aws/*" \
       --filter="-,p /home/brandon/.bna-private/*" \

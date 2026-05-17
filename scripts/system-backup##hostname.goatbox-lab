@@ -1,0 +1,286 @@
+#!/bin/bash
+
+#####################################################
+##
+## system-backup
+##
+## Takes a live image backup of the `goatbox-lab` Framework Desktop
+##   (the headless MiSTer-lab / zn-fpga remote workhorse).
+##
+## Storage stack on this host (DIFFERENT from the fw16 laptop):
+##   2x WD_BLACK SN7100 2TB NVMe
+##     -> nvme{0,1}n1p2 -> mdadm RAID1 `md0` (metadata 1.2)
+##       -> LVM PV -> VG `vg_lab` -> LVs (root, home, ...)
+##   EFI is NOT in the RAID. nvme0n1p1 -> /boot (live ESP, in the EFI
+##   NVRAM boot entry); nvme1n1p1 (label EFI1) -> /boot-backup, a manual
+##   mirror of /boot. If nvme0 dies, point firmware at /boot-backup.
+##
+## This script images root + home ONLY (per design: the irreplaceable
+##   zn-fpga artifact store is protected by the separate personal
+##   `backup` rsync, and regeneratable worktree scratch is deliberately
+##   kept out of any image).
+##
+## The backup target /mnt/backup is a CIFS mount of the TrueNAS SMB
+##   share //truenas.bant/goatbox-lab (physically tank/backup/images/
+##   goatbox-lab), authenticated as the `bkplab` service account. There
+##   is no local backup volume on this host.
+##
+## --
+##
+## RESTORE (from Arch install media):
+##   1. Recreate partitions on both NVMe from the sfdisk dumps
+##      (preserves PARTUUIDs):
+##        sfdisk /dev/<diskA> < sfdisk-...<euiA>.txt
+##        sfdisk /dev/<diskB> < sfdisk-...<euiB>.txt
+##   2. Recreate the RAID1 from the saved superblocks. Easiest:
+##        mdadm --assemble --scan        # if superblocks survived
+##      else recreate with the SAME metadata/UUID from mdadm-examine.txt:
+##        mdadm --create /dev/md0 --level=1 --raid-devices=2 \
+##              --metadata=1.2 --uuid=<from mdadm-examine.txt> \
+##              /dev/<A>p2 /dev/<B>p2
+##      (cross-check mdadm-detail.txt / mdadm.conf.txt before --create;
+##       a wrong --uuid or device order is unrecoverable.)
+##   3. Recreate the LVM PV/VG/LVs:
+##        pvcreate --uuid <...> --restorefile etc-lvm-backup-vg_lab /dev/md0
+##        vgcfgrestore -f etc-lvm-backup-vg_lab vg_lab
+##        vgchange -ay vg_lab
+##   4. Restore filesystems with fsarchiver (brings back block UUIDs):
+##        fsarchiver restfs boot.fsa id=0,dest=/dev/<diskA>p1
+##        fsarchiver restfs root.fsa id=0,dest=/dev/vg_lab/root
+##        fsarchiver restfs home.fsa id=0,dest=/dev/vg_lab/home
+##   5. Re-establish the ESP mirror + NVRAM:
+##        - copy the restored /boot contents onto nvme1n1p1 (label EFI1)
+##          so /boot-backup mirrors /boot
+##        - efibootmgr -c ... for the primary ESP (see efibootmgr.txt)
+##   6. Swap UUID is in blkid.txt and is NOT captured by fsarchiver:
+##        mkswap -U <swap-uuid-from-blkid.txt> /dev/vg_lab/swap
+##   7. chroot in, run mkinitcpio -P (mdadm_udev + lvm2 hooks), reinstall
+##      the boot loader. Verify /etc/mdadm.conf has the ARRAY line.
+##
+#####################################################
+
+BACKUP_ROOT_PATH="/mnt/backup/"
+DAYS_BETWEEN_BACKUPS=6
+MAX_BACKUP_AGE_DAYS=13
+SNAPSIZ='50G'          # held for the full network write -> more margin than fw16's local-write case
+VOLGRP='vg_lab'
+
+# nvme disks by stable id (see lsblk / /dev/disk/by-id)
+DISK0_BYID='/dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4fcf2aa0'  # nvme0n1, /boot ESP
+DISK1_BYID='/dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4fcf76ff'  # nvme1n1, /boot-backup
+BOOT_UUID='74E2-DB90'  # /boot vfat (nvme0n1p1); see /etc/fstab
+
+cleanup() {
+    # Re-mount /boot if we unmounted it
+    if [ "${UNMOUNTED_BOOT:-0}" -eq 1 ] && ! mountpoint -q /boot; then
+        mount /boot
+    fi
+    # Remove any leftover snapshots
+    TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL='root-backup-snap' /home/brandon/scripts/snap-lvm-delete
+    TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL='home-backup-snap' /home/brandon/scripts/snap-lvm-delete
+}
+trap cleanup EXIT
+
+echo "system-backup on "$(date)
+
+#####################################################
+##
+## Ensure the CIFS backup target is actually mounted.
+##
+## /mnt/backup is a network mount (x-systemd.automount). NEVER write a
+## backup onto the local root filesystem if the SMB share is down --
+## bail cleanly so the daily timer simply retries tomorrow.
+##
+#####################################################
+
+mkdir -p "${BACKUP_ROOT_PATH}"
+ls "${BACKUP_ROOT_PATH}" >/dev/null 2>&1   # poke the automount
+
+if ! findmnt -t cifs "${BACKUP_ROOT_PATH%/}" >/dev/null 2>&1; then
+    if ! mount "${BACKUP_ROOT_PATH%/}" 2>/dev/null \
+       || ! findmnt -t cifs "${BACKUP_ROOT_PATH%/}" >/dev/null 2>&1; then
+        echo "${BACKUP_ROOT_PATH} is not a mounted CIFS share (TrueNAS unreachable?); skipping"
+        exit 0
+    fi
+fi
+
+#####################################################
+##
+## Check if enough time has elapsed since last backup
+##
+#####################################################
+
+SECONDS_BETWEEN_BACKUPS=$((DAYS_BETWEEN_BACKUPS * 24 * 60 * 60))
+
+if ! /home/brandon/scripts/touch-date-check \
+     -f "${BACKUP_ROOT_PATH}backuptime.txt" \
+     -s "${SECONDS_BETWEEN_BACKUPS}"
+then
+    echo "Canceling, as not enough time has elapsed since last backup."
+    exit 0
+fi
+
+#####################################################
+##
+## Delete backups older than MAX_BACKUP_AGE_DAYS
+##
+#####################################################
+
+find "$BACKUP_ROOT_PATH" -maxdepth 1 -type d -name '20*' -mtime "+$MAX_BACKUP_AGE_DAYS" -exec rm -rf {} +
+
+#####################################################
+##
+## Init backup params and path
+##
+#####################################################
+TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
+BACKDIR="${BACKUP_ROOT_PATH}${TIMESTAMP}"
+RES=0 # returned by this script to indicate any errors
+mkdir ${BACKDIR}
+
+#####################################################
+##
+## Include the current version of this backup script for documentation
+##
+#####################################################
+
+cp $(readlink -f "$0") "${BACKDIR}/README"
+
+#####################################################
+##
+## Back up partition tables, RAID + LVM metadata, and block UUIDs
+##
+## See the RESTORE header for how each of these is used.
+##
+#####################################################
+
+# includes PARTUUIDs (both disks)
+sfdisk -d "${DISK0_BYID}" > "${BACKDIR}/sfdisk-partition-table__$(basename "${DISK0_BYID}").txt"
+sfdisk -d "${DISK1_BYID}" > "${BACKDIR}/sfdisk-partition-table__$(basename "${DISK1_BYID}").txt"
+
+# mdadm RAID1 layer (NOT present on the fw16 laptop) -- needed to reassemble md0
+mdadm --detail /dev/md0                       > "${BACKDIR}/mdadm-detail.txt"        2>&1
+mdadm --examine /dev/nvme0n1p2 /dev/nvme1n1p2 > "${BACKDIR}/mdadm-examine.txt"       2>&1
+mdadm --detail --scan --verbose               > "${BACKDIR}/mdadm.conf.txt"          2>&1
+cat /proc/mdstat                              > "${BACKDIR}/proc-mdstat.txt"         2>&1
+
+# includes LVM UUIDs
+cp /etc/lvm/backup/${VOLGRP} "${BACKDIR}/etc-lvm-backup-${VOLGRP}"
+
+# includes filesystem + swap UUIDs
+blkid > "${BACKDIR}/blkid.txt"
+
+#####################################################
+##
+## Back up NVRAM
+##
+#####################################################
+
+efibootmgr -v > "${BACKDIR}/efibootmgr.txt"
+
+#####################################################
+##
+## Back up /boot (the live ESP, nvme0n1p1).
+##
+## /boot-backup (nvme1n1p1, label EFI1) is a manual mirror of the same
+## content -- it is reconstructed on restore (see RESTORE step 5), not
+## archived separately here.
+##
+#####################################################
+
+echo "backing up /boot: "$(date)
+
+if mountpoint -q /boot; then
+    if ! umount /boot
+    then
+        echo "unable to unmount /boot"
+        exit 1
+    fi
+    UNMOUNTED_BOOT=1
+fi
+
+if ! fsarchiver savefs -Z8 -j8 "${BACKDIR}/boot.fsa" /dev/disk/by-uuid/${BOOT_UUID}
+then
+    echo "fsarchive exited with a fail status on /boot"
+    RES=1
+fi
+
+if [ "${UNMOUNTED_BOOT:-0}" -eq 1 ]; then
+    if ! mount /boot; then
+        echo "unable to mount /boot"
+        exit 1
+    fi
+    UNMOUNTED_BOOT=0
+fi
+
+(cd "${BACKDIR}" && sha256sum boot.fsa > boot.fsa.sha256)
+
+#####################################################
+##
+## Back up /dev/vg_lab/root
+##
+#####################################################
+
+echo "backing up root: "$(date)
+
+TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL='root-backup-snap' /home/brandon/scripts/snap-lvm-delete
+
+if ! VOLGROP="${VOLGRP}" ORIGVOL='root' SNAPVOL='root-backup-snap' SNAPSIZ="${SNAPSIZ}" /home/brandon/scripts/snap-lvm
+then
+    echo "unable to snap root"
+    exit 1
+fi
+
+if ! FSAOPTS='-Z8 -j8' VOLGROP="${VOLGRP}" SNAPVOL='root-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='root' /home/brandon/scripts/snap-lvm-fsarchive
+then
+    echo "fsarchive exited with a fail status on root"
+    RES=1
+fi
+
+VOLGROP="${VOLGRP}" SNAPVOL='root-backup-snap' /home/brandon/scripts/snap-lvm-delete
+
+(cd "${BACKDIR}" && sha256sum root.fsa > root.fsa.sha256)
+
+#####################################################
+##
+## Back up /dev/vg_lab/home
+##
+#####################################################
+
+echo "backing up home: "$(date)
+
+TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL='home-backup-snap' /home/brandon/scripts/snap-lvm-delete
+
+if ! VOLGROP="${VOLGRP}" ORIGVOL='home' SNAPVOL='home-backup-snap' SNAPSIZ="${SNAPSIZ}" /home/brandon/scripts/snap-lvm
+then
+    echo "unable to snap home"
+    exit 1
+fi
+
+if ! FSAOPTS='-Z8 -j8' VOLGROP="${VOLGRP}" SNAPVOL='home-backup-snap' BACKDIR="${BACKDIR}" BACKNAM='home' /home/brandon/scripts/snap-lvm-fsarchive
+then
+    echo "fsarchive exited with a fail status on home"
+    RES=1
+fi
+
+VOLGROP="${VOLGRP}" SNAPVOL='home-backup-snap' /home/brandon/scripts/snap-lvm-delete
+
+(cd "${BACKDIR}" && sha256sum home.fsa > home.fsa.sha256)
+
+#####################################################
+##
+## Update backuptime
+##
+#####################################################
+
+if [[ ${RES} -lt 1 ]]
+then
+    date +%s > "${BACKUP_ROOT_PATH}backuptime.txt"
+else
+    echo "error with backup; exiting without updating backuptime: "$(date)
+    exit ${RES}
+fi
+
+echo "finished: "$(date)
+
+exit ${RES}

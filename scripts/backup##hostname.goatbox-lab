@@ -1,0 +1,221 @@
+#!/bin/bash
+
+# Personal/file backup for goatbox-lab.
+#
+# Mirrors the local root `/` filesystem tree (minus the exclusion list
+# below) to TrueNAS via rsync over SSH as the bkplab service account.
+# This is the whole-system file backup -- same model as the fw16
+# `backup`, generalized to this host's LV layout.
+#
+# Every LV whose mountpoint falls inside the backed-up tree is
+# LVM-snapshotted so the rsync source is point-in-time consistent, then
+# the snapshots are assembled into a unified `/`-rooted tree and rsynced
+# as ONE mirror. On goatbox-lab that is 4 LVs:
+#
+#   vg_lab/root               -> /                              (tree root)
+#   vg_lab/home               -> /home
+#   vg_lab/zn-fpga            -> /home/brandon/zn-fpga-out
+#   vg_lab/zn-fpga-worktrees  -> /home/brandon/src/fpga/zn-fpga.worktrees
+#
+# (downloads + dropbox LVs are NOT synced -- excluded below; swap N/A.
+#  root+home are ALSO covered by the fsarchiver image backup; that is
+#  intentional and independent.)
+#
+# History is NOT kept as dated rsync dirs -- it comes from the TrueNAS
+# ZFS pre-rsync snapshot taken each run (pruned at 180 days). The rsync
+# target is therefore a single live mirror (--delete).
+#
+# Runs as root via systemd (LVM snapshots need root); SSH uses brandon's
+# key explicitly (root can read it) authorized on the bkplab account.
+
+SNAP_SIZE="60G"          # held for the whole rsync; zn-fpga-worktrees can
+                         # churn under overnight sims, so margin > fw16's 40G
+SNAP_MNT="/mnt/rsync-snap"
+SSH_KEY="/home/brandon/.ssh/id_ed25519"
+NAS_USER="bkplab"
+NAS_HOST="truenas.bant"
+# This script runs as root via systemd, where /root/.ssh/known_hosts is
+# empty and BatchMode can't prompt -> host-key verification fails and the
+# job wrongly concludes the NAS is down. Reuse brandon's already-trusted
+# known_hosts (root can read it regardless of perms) so verification
+# still happens, just against a known-good file. ONE definition used for
+# BOTH the reachability check and rsync so they can't drift apart.
+SSH_OPTS="-i ${SSH_KEY} -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=/home/brandon/.ssh/known_hosts -o StrictHostKeyChecking=accept-new"
+NAS_DEST="/mnt/tank/backups/files/goatbox-lab"        # dataset root = the / mirror
+TRUENAS_DATASET="tank/backups/files/goatbox-lab"
+API_KEY_FILE="/etc/truenas-bkplab-snapshot-api.key"
+VOLGRP="vg_lab"
+RES=0
+
+# LV name -> mountpoint within ${SNAP_MNT}. ORDER MATTERS: parent trees
+# must be mounted before the snapshots that nest inside them.
+LV_ROOT='root'
+LV_HOME='home'
+LV_ZNF='zn-fpga'
+LV_ZNFW='zn-fpga-worktrees'
+
+cleanup() {
+    echo "cleaning up local LVM snapshots: $(date)"
+    # unmount deepest-first
+    mountpoint -q "${SNAP_MNT}/home/brandon/src/fpga/zn-fpga.worktrees" && umount "${SNAP_MNT}/home/brandon/src/fpga/zn-fpga.worktrees"
+    mountpoint -q "${SNAP_MNT}/home/brandon/zn-fpga-out" && umount "${SNAP_MNT}/home/brandon/zn-fpga-out"
+    mountpoint -q "${SNAP_MNT}/home" && umount "${SNAP_MNT}/home"
+    mountpoint -q "${SNAP_MNT}" && umount "${SNAP_MNT}"
+    for lv in "${LV_ROOT}" "${LV_HOME}" "${LV_ZNF}" "${LV_ZNFW}"; do
+        TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL="${lv}-rsync-snap" /home/brandon/scripts/snap-lvm-delete
+    done
+}
+trap cleanup EXIT
+
+echo "personal backup (full / mirror) on $(date)"
+
+# Check the NAS is reachable as bkplab before doing anything
+# shellcheck disable=SC2086  # SSH_OPTS is an intentional word-split option list
+if ! ssh ${SSH_OPTS} "${NAS_USER}@${NAS_HOST}" true 2>/dev/null; then
+    echo "NAS unreachable as ${NAS_USER}@${NAS_HOST}, skipping backup"
+    exit 0
+fi
+
+# Take a remote ZFS snapshot on the NAS before syncing (scoped API key)
+TRUENAS_API_KEY=$(cat "${API_KEY_FILE}" 2>/dev/null)
+if [ -n "${TRUENAS_API_KEY}" ]; then
+    SNAP_NAME="pre-rsync-$(date +%Y-%m-%d_%H-%M)"
+    echo "creating TrueNAS pre-rsync snapshot: ${SNAP_NAME}"
+    curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
+        -X POST "https://${NAS_HOST}/api/v2.0/pool/snapshot" \
+        -H "Content-Type: application/json" \
+        -d "{\"dataset\": \"${TRUENAS_DATASET}\", \"name\": \"${SNAP_NAME}\", \"recursive\": false}" \
+        || echo "WARNING: snapshot creation failed, continuing anyway"
+    echo ""
+else
+    echo "WARNING: could not read TrueNAS API key (${API_KEY_FILE}), skipping snapshot"
+fi
+
+# Clean up any stale snapshots from a previous failed run
+for lv in "${LV_ROOT}" "${LV_HOME}" "${LV_ZNF}" "${LV_ZNFW}"; do
+    TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL="${lv}-rsync-snap" /home/brandon/scripts/snap-lvm-delete
+done
+
+# Create the local LVM snapshots (one per synced LV)
+for lv in "${LV_ROOT}" "${LV_HOME}" "${LV_ZNF}" "${LV_ZNFW}"; do
+    if ! VOLGROP="${VOLGRP}" ORIGVOL="${lv}" SNAPVOL="${lv}-rsync-snap" SNAPSIZ="${SNAP_SIZE}" /home/brandon/scripts/snap-lvm; then
+        echo "unable to snap ${lv}"
+        exit 1
+    fi
+done
+
+# Assemble the unified /-rooted tree (parents before nested children)
+mkdir -p "${SNAP_MNT}"
+mount -o ro "/dev/${VOLGRP}/${LV_ROOT}-rsync-snap"  "${SNAP_MNT}"
+mount -o ro "/dev/${VOLGRP}/${LV_HOME}-rsync-snap"  "${SNAP_MNT}/home"
+mount -o ro "/dev/${VOLGRP}/${LV_ZNF}-rsync-snap"   "${SNAP_MNT}/home/brandon/zn-fpga-out"
+mount -o ro "/dev/${VOLGRP}/${LV_ZNFW}-rsync-snap"  "${SNAP_MNT}/home/brandon/src/fpga/zn-fpga.worktrees"
+
+#####################################################
+##
+## Rsync the unified snapshot tree to the NAS
+##
+## --filter excludes mirror the fw16 `backup` exclusion set.
+## NOTE: /mnt/* is excluded, which self-excludes ${SNAP_MNT}.
+##
+#####################################################
+
+echo "starting rsync: $(date)"
+
+MAX_RETRIES=3
+RETRY=0
+
+while [ ${RETRY} -lt ${MAX_RETRIES} ]; do
+
+rsync --archive \
+      --acls \
+      --xattrs \
+      --hard-links \
+      --info=stats2 \
+      -e "ssh ${SSH_OPTS} -o ServerAliveInterval=10 -o ServerAliveCountMax=3" \
+      --partial \
+      --delete \
+      --delete-excluded \
+      --filter="-,p /dev/*" \
+      --filter="-,p /home/brandon/.aws/*" \
+      --filter="-,p /home/brandon/.bna-private/*" \
+      --filter="-,p /home/brandon/.cache/*" \
+      --filter="-,p /home/brandon/.config/Slack/*" \
+      --filter="-,p /home/brandon/.config/google-chrome/*" \
+      --filter="-,p /home/brandon/.config/retroarch/*" \
+      --filter="-,p /home/brandon/.dropbox/*" \
+      --filter="-,p /home/brandon/.local/*" \
+      --filter="-,p /home/brandon/.mozilla/*" \
+      --filter="-,p /home/brandon/.npm/*" \
+      --filter="-,p /home/brandon/.npm-packages/*" \
+      --filter="-,p /home/brandon/.cargo/*" \
+      --filter="-,p /home/brandon/.zoom/*" \
+      --filter="-,p /home/brandon/.ssh/*" \
+      --filter="-,p /home/brandon/.wine/*" \
+      --filter="-,p /home/brandon/Dropbox/*" \
+      --filter="-,p /home/brandon/Downloads/*" \
+      --filter="-,p /home/brandon/vm/*" \
+      --filter="-,p /home/brandon/vm2/*" \
+      --filter="-,p /home/brandon/opt/*" \
+      --filter="-,p /home/brandon/temp/*" \
+      --filter="-,p /home/brandon/build/*" \
+      --filter="-,p /home/brandon/tmp/*" \
+      --filter="-,p /home/brandon/steam/*" \
+      --filter="-,p /home/brandon/qmk_firmware/*" \
+      --filter="-,p /home/brandon/src/fpga/zn-fpga-ws*" \
+      --filter="-,p /home/brandon/src/fpga/zn-fpga.worktrees/**/out_sim/" \
+      --filter="-,p /home/brandon/src/fpga/zn-fpga.worktrees/**/work/" \
+      --filter="-,p /home/brandon/src/fpga/zn-fpga.worktrees/**/output_files/" \
+      --filter="-,p /home/brandon/src/fpga/zn-fpga.worktrees/**/temp/" \
+      --filter="-,p /lost+found" \
+      --filter="-,p /media/*" \
+      --filter="-,p /mnt/*" \
+      --filter="-,p /proc/*" \
+      --filter="-,p /run/*" \
+      --filter="-,p /sys/*" \
+      --filter="-,p /tmp/*" \
+      --filter="-,p /var/cache/*" \
+      --filter="-,p /var/lib/*" \
+      --filter="-,p /var/tmp/*" \
+      "${SNAP_MNT}/" "${NAS_USER}@${NAS_HOST}:${NAS_DEST}/"
+
+RES=$?
+
+if [ ${RES} -eq 0 ]; then
+    break
+fi
+
+RETRY=$((RETRY + 1))
+if [ ${RETRY} -lt ${MAX_RETRIES} ]; then
+    echo "rsync failed (exit ${RES}), retry ${RETRY}/${MAX_RETRIES} in 30s: $(date)"
+    sleep 30
+fi
+
+done
+
+# Prune pre-rsync remote ZFS snapshots older than 180 days
+if [ -n "${TRUENAS_API_KEY}" ]; then
+    echo "pruning pre-rsync snapshots older than 180 days: $(date)"
+    CUTOFF=$(date -d "180 days ago" +%s)
+    curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
+        "https://${NAS_HOST}/api/v2.0/pool/snapshot?limit=500" 2>/dev/null \
+    | python3 -c "
+import sys, json
+cutoff = int(sys.argv[1])
+data = json.load(sys.stdin)
+for s in data:
+    if s['dataset'] == '${TRUENAS_DATASET}' and s['snapshot_name'].startswith('pre-rsync-'):
+        created = int(s['properties']['creation']['rawvalue'])
+        if created < cutoff:
+            print(s['id'])
+" "${CUTOFF}" | while read -r SNAP_ID; do
+        echo "  deleting: ${SNAP_ID}"
+        curl -sk -H "Authorization: Bearer ${TRUENAS_API_KEY}" \
+            -X DELETE "https://${NAS_HOST}/api/v2.0/pool/snapshot/id/$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "${SNAP_ID}")" \
+            || echo "  WARNING: failed to delete ${SNAP_ID}"
+    done
+fi
+
+# cleanup runs automatically via EXIT trap
+echo "finished: $(date)"
+exit ${RES}

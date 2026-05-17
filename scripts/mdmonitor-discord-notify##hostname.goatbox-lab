@@ -1,0 +1,49 @@
+#!/bin/bash
+#
+# mdmonitor-discord-notify
+#
+# PROGRAM target for `mdadm --monitor` (mdmonitor.service) on goatbox-lab.
+# This is a HEADLESS box -- a degraded/failed md0 has no console to show
+# it, so a second silent disk failure could destroy the pool unnoticed.
+# Alert path = the same openclaw -> Discord #goatbox-lab channel the
+# zn-fpga worktrees use.
+#
+# mdadm calls:  PROGRAM <event> <md-device> [<component-device>]
+# mdmonitor.service runs as ROOT; openclaw is a brandon-user npm tool
+# talking to the brandon-owned gateway, so we drop privileges to brandon.
+#
+# Invariant: NEVER fail (always exit 0) and ALWAYS log to the journal,
+# so a broken Discord path can't break monitoring or hide the event.
+
+EVENT="$1"
+MDDEV="$2"
+COMPONENT="$3"
+CHANNEL='1504360370070880286'          # Discord #goatbox-lab (infra). NOT 1504360410759823362 = #goatbox-lab-zn-fpga (zn-fpga worktrees)
+OPENCLAW='/home/brandon/.npm-packages/bin/openclaw'
+
+HOST="$(hostname)"
+MSG="[mdadm/${HOST}] ${EVENT} on ${MDDEV}${COMPONENT:+ (${COMPONENT})}"
+
+# Always record it locally first (survives Discord/openclaw being down).
+logger -t mdmonitor -p daemon.crit -- "${MSG}"
+
+# Only the events that actually mean "act now" get a Discord ping;
+# TestMessage is forwarded too so `mdadm --monitor --test` proves the pipe.
+case "${EVENT}" in
+    Fail|FailSpare|DegradedArray|DeviceDisappeared|SparesMissing|MoveSpare|TestMessage)
+        DETAIL="$(mdadm --detail "${MDDEV}" 2>/dev/null | sed -n '1,20p')"
+        FULL="${MSG}"$'\n'"\`\`\`"$'\n'"${DETAIL}"$'\n'"\`\`\`"
+        # mdmonitor runs as root; run openclaw in brandon's context.
+        runuser -u brandon -- env HOME=/home/brandon \
+            "${OPENCLAW}" message send --channel discord \
+            --target "channel:${CHANNEL}" --message "${FULL}" \
+            >/dev/null 2>&1 \
+            || logger -t mdmonitor -p daemon.err -- \
+               "Discord notify FAILED for: ${MSG}"
+        ;;
+    *)
+        : # RebuildNN / RebuildStarted / RebuildFinished etc. -> journal only
+        ;;
+esac
+
+exit 0

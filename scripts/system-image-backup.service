@@ -1,0 +1,17 @@
+[Unit]
+Description=System image backup (fsarchiver root+home -> TrueNAS SMB)
+Documentation=file:///home/brandon/scripts/system-backup
+# CIFS target is a network automount; the script also self-guards and
+# exits 0 if the share is unreachable.
+After=network-online.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/brandon/scripts/system-backup
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+# A full root+home image over GbE SMB can take a while; don't let
+# systemd kill it mid-archive.
+TimeoutStartSec=infinity

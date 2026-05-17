@@ -5,13 +5,13 @@ path=(~/.bun/bin ~/opt/altera/24.1std/questa_fe/bin /opt/rocm/bin ~/bin ~/script
 quartus-17lite() {
     path=(${path:#*altera/*/quartus/bin})
     path=(~/opt/altera/17.0lite/quartus/bin $path[@])
-    export QSYS_ROOTDIR="/home/brandon/opt/altera/17.0lite/quartus/sopc_builder/bin"
+    export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
 }
 
 quartus-17() {
     path=(${path:#*altera/*/quartus/bin})
     path=(~/opt/altera/17.0std/quartus/bin $path[@])
-    export QSYS_ROOTDIR="/home/brandon/opt/altera/17.0std/quartus/sopc_builder/bin"
+    export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
 }
 
 quartus-24() {

@@ -1,0 +1,40 @@
+#!/bin/bash
+#
+# smartd-discord-notify
+#
+# `-M exec` target for smartd on goatbox-lab (headless). smartd ONLY
+# runs this when something is wrong (NVMe critical-warning bit, error-log
+# growth, thermal-critical) or for a one-off `-M test`. There is no
+# "all good" path -- if this runs, a drive needs attention.
+#
+# Alert path = the same openclaw -> Discord #goatbox-lab the zn-fpga
+# worktrees + mdmonitor use. smartd runs as ROOT; openclaw needs the
+# brandon-user gateway, so drop privileges. Always journal-log first so
+# a broken Discord path can't hide a dying disk. Never block smartd.
+#
+# smartd provides the detail via env: SMARTD_DEVICESTRING,
+# SMARTD_FAILTYPE, SMARTD_MESSAGE, SMARTD_FULLMESSAGE, ...
+
+CHANNEL='1504360370070880286'          # Discord #goatbox-lab (infra). NOT 1504360410759823362 = #goatbox-lab-zn-fpga (zn-fpga worktrees)
+OPENCLAW='/home/brandon/.npm-packages/bin/openclaw'
+
+HOST="$(hostname)"
+DEV="${SMARTD_DEVICESTRING:-unknown-device}"
+WHY="${SMARTD_FAILTYPE:-unknown}"
+TEXT="${SMARTD_MESSAGE:-${SMARTD_FULLMESSAGE:-(no smartd message)}}"
+
+MSG="[smartd/${HOST}] ${DEV}: ${WHY} -- ${TEXT}"
+
+# Local record first (survives Discord/openclaw being down).
+logger -t smartd-notify -p daemon.crit -- "${MSG}"
+
+FULL="${MSG}"$'\n'"\`\`\`"$'\n'"${SMARTD_FULLMESSAGE:-${TEXT}}"$'\n'"\`\`\`"
+
+runuser -u brandon -- env HOME=/home/brandon \
+    "${OPENCLAW}" message send --channel discord \
+    --target "channel:${CHANNEL}" --message "${FULL}" \
+    >/dev/null 2>&1 \
+    || logger -t smartd-notify -p daemon.err -- \
+       "Discord notify FAILED for: ${MSG}"
+
+exit 0

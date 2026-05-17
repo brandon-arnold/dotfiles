@@ -1,0 +1,14 @@
+[Unit]
+Description=Personal file backup (curated zn-fpga store -> TrueNAS rsync as bkplab)
+Documentation=file:///home/brandon/scripts/backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/brandon/scripts/backup
+Nice=19
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+# 124G+ over GbE rsync; don't let systemd kill it mid-transfer.
+TimeoutStartSec=infinity

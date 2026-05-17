@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily system image backup (fsarchiver root+home -> TrueNAS SMB)
+
+[Timer]
+# Fires daily; the script's touch-date-check enforces the real
+# DAYS_BETWEEN_BACKUPS spacing, and Persistent=true catches up a run
+# missed while the box was off.
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
