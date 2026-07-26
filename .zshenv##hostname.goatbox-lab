@@ -14,25 +14,31 @@ export LESSOPEN='|~/.lessfilter %s'
 # export QT_SCALE_FACTOR=1.75
 # export LIBGL_ALWAYS_SOFTWARE="1"
 
-export TERM=xterm-256color
+# TRAMP/Emacs need TERM=dumb; do not clobber it for non-terminal callers
+[[ "$TERM" == "dumb" || -n "$INSIDE_EMACS" ]] || export TERM=xterm-256color
 
 export MAKEFLAGS="-j$(nproc)"
 
 export HISTCONTROL=ignorespace
 # Altera/Intel FPGA licensing (goatbox-lab node-locked, enp191s0 9c:bf:0d:01:ea:39).
-# LR-166638 = Quartus 90-day eval (exp 13-Aug-2026); LR-166639 = Questa-FPGA Starter (exp 15-May-2027).
-# Stopgap until paid SW-ONE-QUARTUS arrives (~22-May-2026) — append it here then to unlock full questa_fe + modelsim_ae.
-export LM_LICENSE_FILE=/home/brandon/opt/altera/licenses/LR-166638_License.dat:/home/brandon/opt/altera/licenses/LR-166639_License.dat
-export MGLS_LICENSE_FILE=/home/brandon/opt/altera/licenses/LR-166639_License.dat
+# LR-166883 = paid SW-ONE-QUARTUS: perpetual Quartus + full Questa-FPGA Edition
+#             (intelqsim, non-throttled) + ModelSim, sim exp 18-May-2027.
+# LR-166882 = Quartus 90-day eval (exp 13-Aug-2026) — kept for its full IP catalog
+#             (FFT/FIR/NCO/Viterbi/VIP/CXL/AI Suite) that LR-166883 lacks.
+# Perpetual file FIRST so the real entitlement wins edition resolution; eval
+# supplements IP until 13-Aug-2026, then FlexLM ignores its expired lines.
+# (Superseded LR-166638 eval / LR-166639 Starter still in licenses/, unreferenced.)
+export LM_LICENSE_FILE=/home/brandon/opt/altera/licenses/LR-166883_License.dat:/home/brandon/opt/altera/licenses/LR-166882_License.dat
+export MGLS_LICENSE_FILE=/home/brandon/opt/altera/licenses/LR-166883_License.dat:/home/brandon/opt/altera/licenses/LR-166882_License.dat
 export QSYS_ROOTDIR="/home/brandon/opt/altera/24.1std/quartus/sopc_builder/bin"
 export LATTICE_LICENSE_FILE=/home/brandon/opt/lscc/diamond/3.14/license/license.dat
 # Default quartus/quartus_sh = 17.0 Std (matches project QPF QUARTUS_VERSION=17.0);
-# sim vsim/vlog/vcom/vlib = 24.1 questa_FSE (Questa Intel FPGA *Starter* Edition).
-# LR-166639 only licenses Starter (intelqsimstarter); the full questa_fe vsim
-# fails license checkout ("Invalid license environment"). Switch back to
-# questa_fe/bin when the paid SW-ONE license is appended above (~22-May-2026).
+# sim vsim/vlog/vcom/vlib = 24.1 questa_fe (Questa Intel FPGA *Edition*, full/
+# non-throttled). LR-166883's intelqsim increment licenses it — switched from
+# questa_fse (Starter) per the now-met "when paid SW-ONE arrives" note.
+# Revert to .../questa_fse/bin if questa_fe ever fails license checkout.
 export QUARTUS_ROOTDIR="/home/brandon/opt/altera/17.0std/quartus"
-export PATH="$QUARTUS_ROOTDIR/bin:/home/brandon/opt/altera/24.1std/questa_fse/bin:$PATH"
+export PATH="$QUARTUS_ROOTDIR/bin:/home/brandon/opt/altera/24.1std/questa_fe/bin:$PATH"
 
 export XDG_RUNTIME_DIR="/run/user/$UID"
 export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"

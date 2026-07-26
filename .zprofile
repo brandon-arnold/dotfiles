@@ -77,3 +77,19 @@ alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules --enabl
 
 export PATH=$PATH:$(npm get prefix)/bin
 
+
+# `up`: run a full upgrade, then auto-rebuild eternalterminal if a protobuf/abseil
+# soname bump orphaned it (the AUR never auto-rebuilds; see rebuild-detector).
+# Shows any OTHER packages needing a rebuild too, but only et is rebuilt automatically.
+up() {
+    yay -Syu "$@"
+    local broken; broken=$(checkrebuild 2>/dev/null)
+    [[ -n $broken ]] && { echo ">> packages linking missing/updated libs:"; echo "$broken"; }
+    if grep -qw eternalterminal <<<"$broken"; then
+        local pkg; pkg=$(pacman -Qmq 2>/dev/null | grep -E '^eternalterminal(-client|-server)?$' | head -1)
+        echo ">> auto-rebuilding ${pkg:-eternalterminal} against current protobuf/abseil"
+        yay -S "${pkg:-eternalterminal}" --rebuild --noconfirm
+        systemctl is-enabled et.service &>/dev/null && \
+            sudo systemctl reset-failed et.service && sudo systemctl restart et.service
+    fi
+}
