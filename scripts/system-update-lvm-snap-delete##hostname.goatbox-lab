@@ -1,0 +1,7 @@
+#!/bin/bash
+#
+# Release the pre-update snapshots after a known-good pacman -Syu.
+# Counterpart to system-update-lvm-snap.
+
+VOLGROP='vg_lab' SNAPVOL='root-update-snap' /home/brandon/scripts/snap-lvm-delete
+VOLGROP='vg_lab' SNAPVOL='home-update-snap' /home/brandon/scripts/snap-lvm-delete

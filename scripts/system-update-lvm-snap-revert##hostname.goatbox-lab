@@ -1,0 +1,13 @@
+#!/bin/bash
+#
+# Revert root + home to the pre-update snapshots. Requires a reboot to
+# take effect (root is in use). After reboot the snapshots are merged
+# back into their origin LVs and are gone. Counterpart to
+# system-update-lvm-snap.
+#
+# NOTE: this does NOT restore /boot. If the bad update also shipped a
+# new kernel/initramfs, copy the saved files back from the matching
+# /mnt/backup/<TIMESTAMP>_boot/ directory before rebooting.
+
+VOLGROP='vg_lab' SNAPVOL='root-update-snap' /home/brandon/scripts/snap-lvm-revert
+VOLGROP='vg_lab' SNAPVOL='home-update-snap' /home/brandon/scripts/snap-lvm-revert

@@ -1,0 +1,92 @@
+#!/bin/bash
+#
+# system-update-lvm-snap (goatbox-lab variant)
+#
+# Pre-update safety net: snapshot root + home in vg_lab so a bad
+# pacman -Syu can be rolled back with system-update-lvm-snap-revert.
+# Also stashes the live kernel + initramfs + microcode from /boot to
+# the NAS so a wedged update can be recovered without a full LV revert
+# (drop the saved files back into /boot, refind loads them on next boot).
+#
+# Storage notes for this host (DIFFERENT from the fw16 laptop):
+#   - vg_lab is on mdadm RAID1 over nvme{0,1}n1p2. LVs of interest for a
+#     system update are `root` and `home`.
+#   - /boot is the live ESP on nvme0n1p1 (vfat); refind chains the
+#     kernels directly from there (vmlinuz-linux, initramfs-linux.img,
+#     amd-ucode.img -- NOT under /boot/EFI/arch/ as on the fw16 laptop).
+#   - /mnt/backup is a CIFS mount of //truenas.bant/goatbox-lab. If the
+#     NAS is unreachable we bail rather than skip the /boot stash -- on
+#     this host there is no local backup volume to fall through to.
+#
+# Counterparts:
+#   system-update-lvm-snap-delete   -- after a known-good update
+#   system-update-lvm-snap-revert   -- if the update broke the system
+
+set -u
+
+BACKUP_ROOT_PATH="/mnt/backup/"
+TIMESTAMP="$(date +%Y%m%d-%Hh%M)"
+BACKDIR="${BACKUP_ROOT_PATH}${TIMESTAMP}_boot"
+VOLGRP='vg_lab'
+
+if [ "$(id -u)" != '0' ]; then
+    echo "this script has to be run as root"
+    exit 1
+fi
+
+#####################################################
+##
+## Ensure the CIFS backup target is actually mounted.
+##
+#####################################################
+
+mkdir -p "${BACKUP_ROOT_PATH}"
+ls "${BACKUP_ROOT_PATH}" >/dev/null 2>&1   # poke the automount
+
+if ! findmnt -t cifs "${BACKUP_ROOT_PATH%/}" >/dev/null 2>&1; then
+    if ! mount "${BACKUP_ROOT_PATH%/}" 2>/dev/null \
+       || ! findmnt -t cifs "${BACKUP_ROOT_PATH%/}" >/dev/null 2>&1; then
+        echo "${BACKUP_ROOT_PATH} is not a mounted CIFS share (TrueNAS unreachable?); aborting"
+        exit 1
+    fi
+fi
+
+#####################################################
+##
+## Stash live /boot kernel images on the NAS
+##
+#####################################################
+
+echo "backing up live /boot kernel images to ${BACKDIR}: $(date)"
+mkdir -p "${BACKDIR}"
+cp -f /boot/vmlinuz-linux       "${BACKDIR}/"
+cp -f /boot/initramfs-linux.img "${BACKDIR}/"
+[ -e /boot/initramfs-linux-fallback.img ] && cp -f /boot/initramfs-linux-fallback.img "${BACKDIR}/"
+cp -f /boot/amd-ucode.img       "${BACKDIR}/"
+
+#####################################################
+##
+## Snapshot vg_lab/root and vg_lab/home
+##
+## SNAPSIZ is the COW reservation, not the LV size. A pacman -Syu
+## typically touches a few GB of root; home barely moves. Reservations
+## here are conservative but well within free VG space (~620G free).
+##
+#####################################################
+
+echo "snapshotting vg_lab/root and vg_lab/home: $(date)"
+
+if ! VOLGROP="${VOLGRP}" ORIGVOL='root' SNAPVOL='root-update-snap' SNAPSIZ='50G' /home/brandon/scripts/snap-lvm
+then
+    echo "failed to snapshot root; aborting"
+    exit 1
+fi
+
+if ! VOLGROP="${VOLGRP}" ORIGVOL='home' SNAPVOL='home-update-snap' SNAPSIZ='10G' /home/brandon/scripts/snap-lvm
+then
+    echo "failed to snapshot home; rolling back root snapshot"
+    VOLGROP="${VOLGRP}" SNAPVOL='root-update-snap' /home/brandon/scripts/snap-lvm-delete
+    exit 1
+fi
+
+echo "done: $(date)"

@@ -1,0 +1,67 @@
+[Unit]
+Description=llama.cpp server — Qwen3.6-35B-A3B MTP (speculative decoding)
+Documentation=file:///home/brandon/Dropbox/secondbrain/02_areas/infrastructure/goatbox-lab-local-llm.md
+# Binds loopback only (127.0.0.1:8080) — needs NO nftables rule: the
+# ruleset's input policy is drop with `iif lo accept`, so this is
+# reachable from this host and nowhere else.
+# Runs ALONGSIDE ollama (127.0.0.1:11434); holds ~40 GiB resident while up.
+# The GPU pool is 110 GiB (ROCm0 reports 112640 MiB), from GTT — the BIOS
+# carve-out is only 512 MiB, and /etc/modprobe.d/amdgpu-gtt.conf sets
+# `options ttm pages_limit=28835840 page_pool_size=28835840` to raise it.
+# So this leaves ~70 GiB for anything else on the GPU; the 27B (23.5 GiB of
+# weights) now fits alongside. If that file is ever lost the pool silently
+# drops back to 62.5 GiB and a second large model will OOM.
+After=network.target
+Wants=network-online.target
+# At boot this unit can start DURING amdgpu's probe, before ROCm enumerates
+# (observed: started 40ms before "112640M of GTT memory ready"). Without
+# --device below, llama-server does NOT fail there — it logs a warning,
+# ignores --n-gpu-layers, and serves from CPU indefinitely. --device makes
+# that exit 1 during argument parsing (~44ms, before the 39 GiB model load),
+# so Restart=on-failure can retry; these widen the default 5-starts/10s
+# rate limit to tolerate ~2 min of GPU-not-ready.
+StartLimitIntervalSec=300
+StartLimitBurst=40
+
+[Service]
+Type=simple
+User=ollama
+Group=ollama
+# Reads ollama's content-addressed blob in place (0644, world-readable) —
+# no second copy of the 39 GiB weights. If the tag is ever re-pulled and
+# the hash changes, this unit will fail to start; rediscover the path via
+#   ollama show --modelfile hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q8_K_XL | grep ^FROM
+#
+# --jinja is REQUIRED, not cosmetic: without it llama-server does not use
+# the model's own chat template and TOOL CALLING silently fails to parse,
+# which Hermes depends on. Verified working with it.
+#
+# --spec-draft-n-max 2 beats llama.cpp's default of 3, measured on this
+# box (35B: 1.32x vs 1.23x; 27B: 1.93x vs 1.89x) — acceptance rate falls
+# off faster than the extra draft depth pays for. See the secondbrain doc.
+#
+# --device ROCm0 is a SAFETY GATE, not a perf knob — see [Unit] above. Do not
+# drop it: without it a boot-race failure is silent (CPU fallback at ~86 tok/s
+# prompt processing). Verify the name with `llama-server --list-devices`.
+ExecStart=/usr/bin/llama-server \
+    --model /var/lib/ollama/blobs/sha256-6c6b816537abad90b250a0972b345466028d861ddfe316d5f0de31ca6440f781 \
+    --alias qwen3.6-35b-mtp \
+    --host 127.0.0.1 \
+    --port 8080 \
+    --ctx-size 131072 \
+    --device ROCm0 \
+    --n-gpu-layers 999 \
+    --spec-type draft-mtp \
+    --spec-draft-n-max 2 \
+    --jinja \
+    --no-webui
+Restart=on-failure
+RestartSec=3
+# Cold start reads ~39 GiB off NVMe; don't let systemd give up early.
+TimeoutStartSec=600
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
