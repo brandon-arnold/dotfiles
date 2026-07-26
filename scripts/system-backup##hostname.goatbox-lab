@@ -70,6 +70,24 @@ DISK0_BYID='/dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4fcf2aa0'  # nvme0n
 DISK1_BYID='/dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4fcf76ff'  # nvme1n1, /boot-backup
 BOOT_UUID='74E2-DB90'  # /boot vfat (nvme0n1p1); see /etc/fstab
 
+OPENCLAW='/home/brandon/.npm-packages/bin/openclaw'
+CHANNEL='1504360370070880286'  # Discord #goatbox-lab (infra)
+
+# Notify Discord #goatbox-lab on backup failure.
+# Pattern: logger first (survives Discord being down), then openclaw.
+# Never fails -- Discord outage must not hide the journal record.
+notify() {
+    local MSG="[$(hostname) system-backup] $1"
+    logger -t system-backup -p daemon.crit -- "${MSG}"
+    # systemd runs as root; openclaw needs brandon's gateway context.
+    runuser -u brandon -- env HOME=/home/brandon \
+        "${OPENCLAW}" message send --channel discord \
+        --target "channel:${CHANNEL}" --message "${MSG}" \
+        >/dev/null 2>&1 \
+        || logger -t system-backup -p daemon.err -- \
+           "Discord notify FAILED for: ${MSG}"
+}
+
 cleanup() {
     # Re-mount /boot if we unmounted it
     if [ "${UNMOUNTED_BOOT:-0}" -eq 1 ] && ! mountpoint -q /boot; then
@@ -79,7 +97,21 @@ cleanup() {
     TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL='root-backup-snap' /home/brandon/scripts/snap-lvm-delete
     TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL='home-backup-snap' /home/brandon/scripts/snap-lvm-delete
 }
-trap cleanup EXIT
+# ONE EXIT handler: cleanup ALWAYS runs (remount /boot + delete leftover LVM
+# snapshots), then notify on any non-zero exit. A second `trap ... EXIT` would
+# REPLACE this one -- the old two-trap form let the notify trap clobber
+# cleanup, so a signal-kill mid-fsarchive leaked a *-backup-snap and exhausted
+# the VG. Capture $? FIRST: it's the true exit status, so notify fires on the
+# `exit 1` hard-fail paths (where RES is still 0) and on a kill, while the skip
+# paths (exit 0) stay silent. Using $? instead of ${RES} also kills the old
+# `[ ${RES} -gt 0 ]` unary-operator error on the early skips (RES not yet set).
+on_exit() {
+    local rc=$?
+    cleanup
+    [ "${rc}" -ne 0 ] && notify "Backup FAILED (exit code ${rc})"
+    return "${rc}"
+}
+trap on_exit EXIT
 
 echo "system-backup on "$(date)
 

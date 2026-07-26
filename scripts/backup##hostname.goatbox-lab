@@ -28,8 +28,12 @@
 # Runs as root via systemd (LVM snapshots need root); SSH uses brandon's
 # key explicitly (root can read it) authorized on the bkplab account.
 
-SNAP_SIZE="60G"          # held for the whole rsync; zn-fpga-worktrees can
-                         # churn under overnight sims, so margin > fw16's 40G
+SNAP_SIZE="40G"          # 4 concurrent snaps must fit vg_lab VFree. After the
+                         # 2026-07-25 swap shrink (128G->32G) VFree is ~169G:
+                         # 4x40=160G fits; 4x60=240G did NOT (home snap failed,
+                         # backup broken Jul19-25). 40G still covers worktrees/
+                         # zn-fpga-out churn over a backup window (= fw16 margin).
+                         # More headroom? shrink zn-fpga-worktrees (5G used/228G).
 SNAP_MNT="/mnt/rsync-snap"
 SSH_KEY="/home/brandon/.ssh/id_ed25519"
 NAS_USER="bkplab"
@@ -40,12 +44,15 @@ NAS_HOST="truenas.bant"
 # known_hosts (root can read it regardless of perms) so verification
 # still happens, just against a known-good file. ONE definition used for
 # BOTH the reachability check and rsync so they can't drift apart.
-SSH_OPTS="-i ${SSH_KEY} -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=/home/brandon/.ssh/known_hosts -o StrictHostKeyChecking=accept-new"
+SSH_OPTS="-i ${SSH_KEY} -o BatchMode=yes -o ConnectTimeout=10 -o UserKnownHostsFile=/home/brandon/.ssh/known_hosts -o StrictHostKeyChecking=accept-new -o TCPKeepAlive=yes"
 NAS_DEST="/mnt/tank/backups/files/goatbox-lab"        # dataset root = the / mirror
 TRUENAS_DATASET="tank/backups/files/goatbox-lab"
 API_KEY_FILE="/etc/truenas-bkplab-snapshot-api.key"
 VOLGRP="vg_lab"
 RES=0
+
+OPENCLAW='/home/brandon/.npm-packages/bin/openclaw'
+CHANNEL='1504360370070880286'  # Discord #goatbox-lab (infra)
 
 # LV name -> mountpoint within ${SNAP_MNT}. ORDER MATTERS: parent trees
 # must be mounted before the snapshots that nest inside them.
@@ -53,6 +60,21 @@ LV_ROOT='root'
 LV_HOME='home'
 LV_ZNF='zn-fpga'
 LV_ZNFW='zn-fpga-worktrees'
+
+# Notify Discord #goatbox-lab on backup failure.
+# Pattern: logger first (survives Discord being down), then openclaw.
+# Never fails -- Discord outage must not hide the journal record.
+notify() {
+    local MSG="[$(hostname) personal-backup] $1"
+    logger -t personal-backup -p daemon.crit -- "${MSG}"
+    # systemd runs as root; openclaw needs brandon's gateway context.
+    runuser -u brandon -- env HOME=/home/brandon \
+        "${OPENCLAW}" message send --channel discord \
+        --target "channel:${CHANNEL}" --message "${MSG}" \
+        >/dev/null 2>&1 \
+        || logger -t personal-backup -p daemon.err -- \
+           "Discord notify FAILED for: ${MSG}"
+}
 
 cleanup() {
     echo "cleaning up local LVM snapshots: $(date)"
@@ -65,7 +87,18 @@ cleanup() {
         TRY_SILENT=1 VOLGROP="${VOLGRP}" SNAPVOL="${lv}-rsync-snap" /home/brandon/scripts/snap-lvm-delete
     done
 }
-trap cleanup EXIT
+# ONE EXIT handler: cleanup ALWAYS runs (deletes the LVM snapshots -- leaking
+# them is what exhausts the VG), then notify on any non-zero exit. Capture $?
+# FIRST -- the snap-failure path exits 1 while RES is still 0, so a RES-based
+# check (as in system-backup) would miss the exact failure that's been firing.
+# The NAS-unreachable path exits 0 by design and is intentionally NOT alerted.
+on_exit() {
+    local rc=$?
+    cleanup
+    [ "${rc}" -ne 0 ] && notify "Personal backup FAILED (exit code ${rc})"
+    return "${rc}"
+}
+trap on_exit EXIT
 
 echo "personal backup (full / mirror) on $(date)"
 
@@ -118,6 +151,17 @@ mount -o ro "/dev/${VOLGRP}/${LV_ZNFW}-rsync-snap"  "${SNAP_MNT}/home/brandon/sr
 ## --filter excludes mirror the fw16 `backup` exclusion set.
 ## NOTE: /mnt/* is excluded, which self-excludes ${SNAP_MNT}.
 ##
+## --rsync-path="rsync --fake-super": the receiver runs as the
+## unprivileged bkplab account and cannot chown / set ACLs. --fake-super
+## makes the REMOTE rsync store the true uid/gid/mode/ACLs/xattrs in
+## user.* xattrs instead of discarding them, so a POSIX restore is
+## faithful. RESTORE MUST be done as root OR with a matching
+## `rsync --fake-super` pass, or ownership/ACLs will NOT be rehydrated
+## (files would otherwise all come back owned by bkplab). Requires the
+## dest ZFS dataset to support user xattrs (verified: xattr=on/sa,
+## acltype=posix). --chmod=Du+w above is now just belt (fake-super keeps
+## working dirs writable on its own).
+##
 #####################################################
 
 echo "starting rsync: $(date)"
@@ -128,12 +172,17 @@ RETRY=0
 while [ ${RETRY} -lt ${MAX_RETRIES} ]; do
 
 rsync --archive \
+      --no-specials \
+      --no-devices \
+      --chmod=Du+w \
       --acls \
       --xattrs \
       --hard-links \
       --info=stats2 \
-      -e "ssh ${SSH_OPTS} -o ServerAliveInterval=10 -o ServerAliveCountMax=3" \
+      -e "ssh ${SSH_OPTS} -o ServerAliveInterval=30 -o ServerAliveCountMax=120" \
+      --rsync-path="rsync --fake-super" \
       --partial \
+      --timeout=900 \
       --delete \
       --delete-excluded \
       --filter="-,p /dev/*" \
@@ -144,6 +193,7 @@ rsync --archive \
       --filter="-,p /home/brandon/.config/google-chrome/*" \
       --filter="-,p /home/brandon/.config/retroarch/*" \
       --filter="-,p /home/brandon/.dropbox/*" \
+      --filter="-,p /home/brandon/.dropbox-dist/*" \
       --filter="-,p /home/brandon/.local/*" \
       --filter="-,p /home/brandon/.mozilla/*" \
       --filter="-,p /home/brandon/.npm/*" \
