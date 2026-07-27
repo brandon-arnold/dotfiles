@@ -19,6 +19,14 @@ set $menu wofi --show=drun
 # output * resolution 3840x2160 bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill scale 2
 output * resolution 2560x1600 bg /home/brandon/Pictures/Backgrounds/2560x1600.jpg fill
 
+# Re-apply kanshi profile after a `swaymsg reload`. Sway's reload defaults
+# any connected output to "enabled" and ignores kanshi's last-applied state,
+# which silently re-enables outputs kanshi profiles had explicitly disabled
+# (e.g. eDP-1 under the docked profile). `exec_always` fires on both startup
+# and reload, so this nudges kanshi to re-evaluate; no-op if state already
+# matches a profile.
+exec_always kanshictl reload
+
 #
 # Example configuration:
 #

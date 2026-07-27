@@ -1,7 +1,7 @@
 ### Variables
 set $mod Mod4
 
-seat seat0 xcursor_theme Adwaita 36
+seat seat0 xcursor_theme Adwaita 27
 
 # Home row direction keys, like vim
 set $left h
@@ -18,6 +18,14 @@ set $menu wofi --show=drun
 # Default wallpaper (more resolutions are available in /usr/share/backgrounds/sway/)
 # output * resolution 3840x2160 bg /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png fill scale 2
 output * bg /home/brandon/Pictures/Backgrounds/2560x1600.jpg fill
+
+# Re-apply kanshi profile after a `swaymsg reload`. Sway's reload defaults
+# any connected output to "enabled" and ignores kanshi's last-applied state,
+# which silently re-enables outputs kanshi profiles had explicitly disabled
+# (e.g. eDP-1 under the docked profile). `exec_always` fires on both startup
+# and reload, so this nudges kanshi to re-evaluate; no-op if state already
+# matches a profile.
+exec_always kanshictl reload
 
 # Per-output scaling (laptop vs externals)
 include ~/.config/sway/outputs
@@ -43,6 +51,12 @@ exec swayidle -w \
               resume 'swaymsg "output * dpms on"'
 
 # exec swayidle -w timeout 600 '/usr/bin/systemctl suspend'
+
+# Lid switch: logind is set to ignore the lid (see /etc/systemd/logind.conf.d/),
+# so it never suspends on close. Instead, turn the internal panel off on close and
+# back on when opened. sway-lid no-ops when docked (kanshi owns eDP-1 there).
+bindswitch --locked lid:on  exec /home/brandon/scripts/sway-lid close
+bindswitch --locked lid:off exec /home/brandon/scripts/sway-lid open
 
 ### Key bindings
 #
@@ -199,9 +213,12 @@ bar {
 # Assign Emacs to Ctrl + Alt + 'e'
 bindsym Control+Mod1+e exec --no-startup-id edit
 
-bindsym XF86AudioRaiseVolume exec "pactl set-sink-volume @DEFAULT_SINK@ +10%"
-bindsym XF86AudioLowerVolume exec "pactl set-sink-volume @DEFAULT_SINK@ -10%"
-bindsym XF86AudioMute exec "pactl set-sink-mute @DEFAULT_SINK@ toggle"
+bindsym XF86AudioRaiseVolume exec "/home/brandon/scripts/volume-notify up"
+bindsym XF86AudioLowerVolume exec "/home/brandon/scripts/volume-notify down"
+bindsym XF86AudioMute exec "/home/brandon/scripts/volume-notify mute"
+bindsym $mod+F3 exec "/home/brandon/scripts/volume-notify up"
+bindsym $mod+F2 exec "/home/brandon/scripts/volume-notify down"
+bindsym $mod+F1 exec "/home/brandon/scripts/volume-notify mute"
 # bindsym Num_Lock
 # bindsym Scroll_Lock
 # bindsym XF86Search
@@ -269,7 +286,7 @@ input 1149:33128:Expert_Mouse_TB800_EQ_Wired_Expert_Mouse_TB800_EQ_Wired {
 #     click_method clickfinger
 # }
 
-bindsym $mod+Shift+f exec QT_SCALE_FACTOR=2 qtfm
+bindsym $mod+Shift+f exec env QT_QPA_PLATFORM=wayland QT_SCALE_FACTOR=1.5 qtfm
 # xwayland disable
 
 # capture all screens to clipboard    
@@ -284,12 +301,18 @@ bindsym Shift+Alt+Control+Print exec grim -o $(swaymsg -t get_outputs | jq -r '.
 # lock on Alt+Control+Delete
 bindsym Alt+Control+Delete exec swaylock -f -c 000000
 
+for_window [app_id="Xpra"] floating enable
+
 exec --no-startup-id nm-applet
 exec --no-startup-id libinput-gestures
 exec --no-startup-id /usr/lib/mate-polkit/polkit-mate-authentication-agent-1
 exec --no-startup-id wlsunset -l 47.6 -L -122.3
 exec --no-startup-id easyeffects
 exec --no-startup-id blueman-applet
+# Insync's window-raise ("Open App Window" / `insync show`) calls QWindow::
+# requestActivate(), which the native Wayland Qt backend refuses (a client
+# can't self-raise). Forcing XWayland (QT_QPA_PLATFORM=xcb) restores it.
+exec --no-startup-id env QT_QPA_PLATFORM=xcb insync start
 
 # See https://wiki.archlinux.org/title/Sway#Manage_Sway-specific_daemons_with_systemd
 exec_always systemctl --user start sway-session.target

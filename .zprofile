@@ -1,6 +1,6 @@
 # User PATH
 typeset -U path
-path=(~/.bun/bin ~/opt/altera/24.1std/questa_fe/bin /opt/rocm/bin ~/bin ~/scripts /usr/local/go/bin /home/brandon/.local/bin /home/brandon/opt/lscc/diamond/3.14/bin/lin64/ $path[@])
+path=(~/.bun/bin ~/opt/altera/24.1std/questa_fe/bin /opt/rocm/bin ~/bin ~/scripts /usr/local/go/bin /home/brandon/.local/bin $path[@])
 
 quartus-17lite() {
     path=(${path:#*altera/*/quartus/bin})
@@ -21,6 +21,28 @@ quartus-24() {
 }
 
 quartus-17
+
+# Lattice Diamond ships 32-bit .so files (libz.so etc.) in bin/lin64, which
+# poison cmake/find_library for any unrelated build. Load it on demand only.
+diamond() {
+    path=(/home/brandon/opt/lscc/diamond/3.14/bin/lin64 $path[@])
+}
+
+# `up`: run a full upgrade, then auto-rebuild eternalterminal if a protobuf/abseil
+# soname bump orphaned it (the AUR never auto-rebuilds; see rebuild-detector).
+# Shows any OTHER packages needing a rebuild too, but only et is rebuilt automatically.
+up() {
+    yay -Syu "$@"
+    local broken; broken=$(checkrebuild 2>/dev/null)
+    [[ -n $broken ]] && { echo ">> packages linking missing/updated libs:"; echo "$broken"; }
+    if grep -qw eternalterminal <<<"$broken"; then
+        local pkg; pkg=$(pacman -Qmq 2>/dev/null | grep -E '^eternalterminal(-client|-server)?$' | head -1)
+        echo ">> auto-rebuilding ${pkg:-eternalterminal} against current protobuf/abseil"
+        yay -S "${pkg:-eternalterminal}" --rebuild --noconfirm
+        systemctl is-enabled et.service &>/dev/null && \
+            sudo systemctl reset-failed et.service && sudo systemctl restart et.service
+    fi
+}
 
 # Hex to decimal, decimal to hex. Ex:
 # $ h2d FF
@@ -52,6 +74,11 @@ lpasspass() {
     fi
 }
 
+# Pull latest MAME source
+mamepull() {
+    cd ~/src/mame && git pull
+}
+
 saydone() {
   espeak --stdout "task finished" -v en-us | paplay
 }
@@ -76,20 +103,3 @@ alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules --enabl
 # fi
 
 export PATH=$PATH:$(npm get prefix)/bin
-
-
-# `up`: run a full upgrade, then auto-rebuild eternalterminal if a protobuf/abseil
-# soname bump orphaned it (the AUR never auto-rebuilds; see rebuild-detector).
-# Shows any OTHER packages needing a rebuild too, but only et is rebuilt automatically.
-up() {
-    yay -Syu "$@"
-    local broken; broken=$(checkrebuild 2>/dev/null)
-    [[ -n $broken ]] && { echo ">> packages linking missing/updated libs:"; echo "$broken"; }
-    if grep -qw eternalterminal <<<"$broken"; then
-        local pkg; pkg=$(pacman -Qmq 2>/dev/null | grep -E '^eternalterminal(-client|-server)?$' | head -1)
-        echo ">> auto-rebuilding ${pkg:-eternalterminal} against current protobuf/abseil"
-        yay -S "${pkg:-eternalterminal}" --rebuild --noconfirm
-        systemctl is-enabled et.service &>/dev/null && \
-            sudo systemctl reset-failed et.service && sudo systemctl restart et.service
-    fi
-}

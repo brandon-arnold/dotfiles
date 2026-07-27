@@ -1,0 +1,24 @@
+#!/bin/sh
+# Exit 0 (PAM_SUCCESS) when this laptop is docked, so the sudo PAM stack
+# skips the fingerprint prompt and falls through to the password instead.
+#
+# Referenced from /etc/pam.d/sudo via pam_exec. Because pam_exec runs this
+# AS ROOT during sudo auth, the copy PAM points at must be root-owned and
+# not user-writable. This ~/scripts copy is the canonical (yadm-tracked)
+# source; deploy it to a root-owned path before referencing it from PAM:
+#     sudo install -o root -g root -m 755 \
+#         ~/scripts/sudo-skip-fprint /usr/local/bin/sudo-skip-fprint
+#
+# Signal: presence of the Anker USB-C dock (291a:8392) on the USB bus.
+# Uses only shell builtins + sysfs so it has no $PATH dependency in the
+# minimal pam_exec environment.
+
+for dev in /sys/bus/usb/devices/*; do
+	read -r vendor  < "$dev/idVendor"  2>/dev/null || continue
+	read -r product < "$dev/idProduct" 2>/dev/null || continue
+	if [ "$vendor" = "291a" ] && [ "$product" = "8392" ]; then
+		exit 0   # docked → skip fingerprint
+	fi
+done
+
+exit 1           # not docked → use fingerprint as normal
