@@ -60,3 +60,7 @@ MANPATH="$NPM_PACKAGES/share/man:$(manpath)"
 
 # Enable Claude Code Agent Teams
 export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+
+# ~/.local/bin on PATH for ALL shells (login shells also get it via .zprofile).
+# Ensures gog and other user-local binaries resolve in non-interactive shells (e.g. Claude Code).
+export PATH="$HOME/.local/bin:$PATH"

@@ -28,12 +28,24 @@
 # Runs as root via systemd (LVM snapshots need root); SSH uses brandon's
 # key explicitly (root can read it) authorized on the bkplab account.
 
-SNAP_SIZE="40G"          # 4 concurrent snaps must fit vg_lab VFree. After the
-                         # 2026-07-25 swap shrink (128G->32G) VFree is ~169G:
-                         # 4x40=160G fits; 4x60=240G did NOT (home snap failed,
-                         # backup broken Jul19-25). 40G still covers worktrees/
-                         # zn-fpga-out churn over a backup window (= fw16 margin).
-                         # More headroom? shrink zn-fpga-worktrees (5G used/228G).
+# Per-LV COW reservations. All 4 snaps exist CONCURRENTLY, so the sum
+# must fit vg_lab VFree; each must also cover its origin's write churn
+# over the rsync window (overflow invalidates that snapshot mid-run).
+# root/home churn overnight is logs/journal -- a few GB. The zn-fpga
+# LVs take sim/build output (ref traces are 2.5G+ apiece), so they get
+# the bulk. Sum = 79G.
+# History: 4x60G broke Jul19-25 (VFree ~73G after ollama LV added);
+# 4x40G broke Aug4-5 (VFree ~109G after root lvextend +60G on Aug 3).
+# Uniform sizing loses: every VG allocation re-breaks it. More
+# headroom? shrink zn-fpga-worktrees (27G used / 228G).
+snap_size_for() {
+    case "$1" in
+        root)              echo '12G' ;;
+        home)              echo '12G' ;;
+        zn-fpga)           echo '35G' ;;
+        zn-fpga-worktrees) echo '20G' ;;
+    esac
+}
 SNAP_MNT="/mnt/rsync-snap"
 SSH_KEY="/home/brandon/.ssh/id_ed25519"
 NAS_USER="bkplab"
@@ -131,7 +143,7 @@ done
 
 # Create the local LVM snapshots (one per synced LV)
 for lv in "${LV_ROOT}" "${LV_HOME}" "${LV_ZNF}" "${LV_ZNFW}"; do
-    if ! VOLGROP="${VOLGRP}" ORIGVOL="${lv}" SNAPVOL="${lv}-rsync-snap" SNAPSIZ="${SNAP_SIZE}" /home/brandon/scripts/snap-lvm; then
+    if ! VOLGROP="${VOLGRP}" ORIGVOL="${lv}" SNAPVOL="${lv}-rsync-snap" SNAPSIZ="$(snap_size_for "${lv}")" /home/brandon/scripts/snap-lvm; then
         echo "unable to snap ${lv}"
         exit 1
     fi

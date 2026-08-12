@@ -205,7 +205,7 @@ class Matcher:
 
 
 class Screenpipe:
-    """Best-effort push of transcript segments into the sp.bna.io index.
+    """Best-effort push of transcript segments into the Screenpipe index.
 
     Uses POST /add (live segments land at ingest wall-clock, close enough
     for realtime; /raw_sql is read-only upstream now). Failures are logged
