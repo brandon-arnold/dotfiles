@@ -1,0 +1,4 @@
+
+# omi-hub live config: contains AWS account id, WhatsApp id, host names.
+# The redacted config.toml.example is committed instead.
+.config/omi-hub/config.toml

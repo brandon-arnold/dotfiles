@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly Omi transcript export (incremental)
+
+[Timer]
+# Omi finalizes a conversation ~2 min after speech ends, so hourly keeps the
+# worst-case loss window small without any real cost — an incremental run is a
+# handful of API calls against a 100/min, 10k/day budget.
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

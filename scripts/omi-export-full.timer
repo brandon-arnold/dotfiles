@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly full reconcile of the Omi transcript archive
+
+[Timer]
+# The hourly run stops early once pages look current, so it would never notice
+# an EDIT to an older conversation (Omi lets summaries and transcripts be
+# edited after the fact) or one that finalized late. This walks everything.
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

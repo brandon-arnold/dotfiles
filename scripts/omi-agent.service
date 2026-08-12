@@ -1,0 +1,17 @@
+[Unit]
+Description=omi-agent - Claude Agent SDK session for Omi voice commands
+Documentation=file:///home/brandon/Dropbox/secondbrain/01_projects/ai_wearables/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=brandon
+Environment=HOME=/home/brandon
+Environment=PATH=/home/brandon/.local/bin:/home/brandon/.npm-packages/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/uv run --script /home/brandon/scripts/omi-agent
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

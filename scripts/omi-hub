@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+# omi-hub — SQS consumer for the Omi pendant pipeline (ai_wearables project).
+#
+# Long-polls bna-omi-transcript-queue for webhook envelopes relayed by the
+# bna-omi-ingest Lambda, spools every payload to a daily JSONL file, and runs a
+# per-session wake-word matcher over realtime transcript segments. Extracted
+# commands route to sinks (Discord via openclaw, tmux send-keys); a small
+# intent table answers known queries directly without waking an agent.
+#
+# Config: /home/brandon/.config/omi-hub/config.toml
+# Design doc: ~/Dropbox/secondbrain/01_projects/ai_wearables/README.md
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import tomllib
+from collections import OrderedDict
+
+CONFIG_PATH = os.path.expanduser("~/.config/omi-hub/config.toml")
+
+
+def log(stage, msg):
+    print(f"[{stage}] {msg}", flush=True)
+
+
+def normalize(text):
+    text = re.sub(r"[^a-z0-9' ]+", " ", text.lower())
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def edit_distance(a, b, cap=2):
+    """Levenshtein, short-circuited once it exceeds cap."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (ca != cb)))
+        if min(cur) > cap:
+            return cap + 1
+        prev = cur
+    return prev[-1]
+
+
+class Dedup:
+    """Bounded seen-set keyed on envelope content hash (SQS is at-least-once)."""
+
+    def __init__(self, cap=4096):
+        self.entries = OrderedDict()
+        self.cap = cap
+
+    def seen(self, key):
+        if key in self.entries:
+            return True
+        self.entries[key] = None
+        if len(self.entries) > self.cap:
+            self.entries.popitem(last=False)
+        return False
+
+
+class Spool:
+    def __init__(self, directory):
+        self.dir = os.path.expanduser(directory)
+        os.makedirs(self.dir, mode=0o700, exist_ok=True)
+
+    def append(self, obj):
+        path = os.path.join(self.dir, time.strftime("%Y-%m-%d") + ".jsonl")
+        with open(path, "a") as f:
+            f.write(json.dumps(obj, separators=(",", ":")) + "\n")
+
+
+class Matcher:
+    """Per-session state machine: IDLE scans for wake phrases (with a rolling
+    tail so phrases split across segments still match); CAPTURING buffers text
+    until a segment gap or the hard cap, then hands off for dispatch."""
+
+    TAIL_WORDS = 8
+
+    def __init__(self, cfg):
+        self.gap = cfg.get("gap_seconds", 3.5)
+        # A capture with NO text yet means the wake word was an address and
+        # the command is still coming — Omi delivers it as its own segment
+        # after a real pause (observed 2.31 s: "Banto," then "how many
+        # leases are taken on ZN-FPGA?"). Waiting only `gap` there raced the
+        # speaker and dispatched empty, so an empty capture waits longer.
+        self.empty_gap = cfg.get("empty_gap_seconds", 10.0)
+        # Silence in SPEECH time that separates one utterance from the next.
+        self.speech_gap = cfg.get("speech_gap_seconds", 3.0)
+        self.max_capture = cfg.get("max_capture_seconds", 30)
+        self.require_is_user = cfg.get("require_is_user", True)
+        # wake table: list of (wake_name, phrase, sink_name)
+        self.wakes = []
+        # fuzzy single-token triggers: (wake_name, token, sink, max_distance).
+        # ASR renders a distinctive name inconsistently ("banto" -> "bantu",
+        # "bandu", ...), and an exact variant list can never be complete.
+        self.fuzzy = []
+        for name, w in cfg.get("wake", {}).items():
+            for p in w.get("phrases", []):
+                self.wakes.append((name, normalize(p), w["sink"]))
+            dist = w.get("fuzzy_distance", 1)
+            for t in w.get("fuzzy_tokens", []):
+                self.fuzzy.append((name, normalize(t), w["sink"], dist))
+        self.sessions = {}
+
+    def _session(self, sid):
+        return self.sessions.setdefault(sid, {"tail": "", "capture": None})
+
+    def feed(self, sid, segments, now):
+        done = []
+        s = self._session(sid)
+        for seg in segments:
+            cap = s["capture"]
+            speaker = seg.get("speaker")
+            # Omi's diarization flips is_user mid-utterance for the SAME
+            # speaker (observed live: "Hey, goat." is_user=True, then "How
+            # are my backups?" is_user=False, both SPEAKER_1), which used to
+            # strand the wake with an empty command. Triggering still
+            # requires is_user; continuation trusts the wake's speaker.
+            if cap:
+                if not (seg.get("is_user") or speaker == cap.get("speaker")):
+                    continue
+            elif self.require_is_user and not seg.get("is_user"):
+                continue
+            text = normalize(seg.get("text", ""))
+            if not text:
+                continue
+            if cap:
+                # Decide continuation by SPEECH time, not arrival time. Omi's
+                # "realtime" stream lags and bursts — one continuous sentence
+                # arrived 11.1 s apart on the wire but only 0.62 s apart in
+                # speech (2026-08-05 "A Banto ..."), so wall-clock gaps
+                # measure delivery lag, not whether Brandon stopped talking.
+                start, prev_end = seg.get("start"), cap.get("speech_end")
+                if (start is not None and prev_end is not None
+                        and start - prev_end > self.speech_gap):
+                    # A genuinely new utterance: close the command, then let
+                    # this segment fall through as fresh input (it may carry
+                    # its own wake word).
+                    done.append(self._finish(s))
+                    cap = None
+                else:
+                    cap["text"] = (cap["text"] + " " + text).strip()
+                    cap["last"] = now
+                    if seg.get("end") is not None:
+                        cap["speech_end"] = seg["end"]
+                    if now - cap["started"] >= self.max_capture:
+                        done.append(self._finish(s))
+                    continue
+            scan = (s["tail"] + " " + text).strip()
+            hit = None
+            for name, phrase, sink in self.wakes:
+                idx = scan.find(phrase)
+                if idx >= 0 and (hit is None or idx < hit[3]):
+                    hit = (name, phrase, sink, idx, len(phrase))
+            if hit is None:
+                # Token-level fuzzy pass: catches ASR spellings no variant
+                # list anticipated. Earliest matching token wins.
+                pos = 0
+                for word in scan.split():
+                    idx = scan.find(word, pos)
+                    pos = idx + len(word)
+                    for name, token, sink, dist in self.fuzzy:
+                        if edit_distance(word, token, dist) <= dist:
+                            hit = (name, word, sink, idx, len(word))
+                            break
+                    if hit:
+                        break
+            if hit:
+                name, phrase, sink, idx, plen = hit
+                cmd = scan[idx + plen:].strip()
+                s["capture"] = {"wake": name, "sink": sink, "text": cmd,
+                                "speaker": speaker, "started": now, "last": now,
+                                "speech_end": seg.get("end")}
+                s["tail"] = ""
+                log("match", f"wake '{name}' session={sid}")
+            else:
+                words = scan.split()
+                s["tail"] = " ".join(words[-self.TAIL_WORDS:])
+        return done
+
+    def tick(self, now):
+        done = []
+        for s in self.sessions.values():
+            cap = s["capture"]
+            if not cap:
+                continue
+            gap = self.gap if cap["text"] else self.empty_gap
+            if (now - cap["last"] >= gap
+                    or now - cap["started"] >= self.max_capture):
+                done.append(self._finish(s))
+        return done
+
+    def _finish(self, s):
+        cap = s["capture"]
+        s["capture"] = None
+        return cap
+
+    def has_pending(self):
+        return any(s["capture"] for s in self.sessions.values())
+
+
+class Screenpipe:
+    """Best-effort push of transcript segments into the sp.bna.io index.
+
+    Uses POST /add (live segments land at ingest wall-clock, close enough
+    for realtime; /raw_sql is read-only upstream now). Failures are logged
+    and dropped — the spool and Omi cloud remain the canonical records."""
+
+    def __init__(self, cfg):
+        self.enabled = cfg.get("enabled", False)
+        self.url = cfg.get("url", "").rstrip("/")
+        self.device = cfg.get("device_name", "omi-pendant")
+        self.key = ""
+        keyfile = cfg.get("api_key_file", "")
+        if self.enabled and keyfile:
+            try:
+                with open(os.path.expanduser(keyfile)) as f:
+                    self.key = f.read().strip()
+            except OSError as e:
+                log("screenpipe", f"api key unreadable ({e}); disabled")
+                self.enabled = False
+
+    def post_segments(self, segments):
+        if not self.enabled or not self.url:
+            return
+        import urllib.error
+        import urllib.request
+        for seg in segments:
+            text = (seg.get("text") or "").strip()
+            if not text:
+                continue
+            body = json.dumps({
+                "device_name": self.device,
+                "content": {"content_type": "transcription",
+                            "data": {"transcription": text,
+                                     "transcription_engine": "omi"}},
+            }).encode()
+            req = urllib.request.Request(
+                f"{self.url}/add", data=body, method="POST",
+                headers={"content-type": "application/json",
+                         "Authorization": f"Bearer {self.key}"})
+            try:
+                urllib.request.urlopen(req, timeout=5)
+            except (urllib.error.URLError, OSError) as e:
+                log("screenpipe", f"post failed (dropped): {e}")
+                return
+
+
+class Dispatcher:
+    def __init__(self, cfg):
+        self.sinks = cfg.get("sinks", {})
+        self.intents = [
+            (re.compile(r"\bbackups?\b.*\b(status|going|doing|ok|okay|good|healthy)\b"),
+             self._intent_backup_status),
+        ]
+
+    def dispatch(self, cap):
+        text = cap["text"].strip()
+        if not text:
+            log("dispatch", f"empty command after wake '{cap['wake']}', dropped")
+            return
+        # Agent sink: enqueue the raw command for omi-agent (its own daemon);
+        # intents included — the agent owns delivery for this lane.
+        if cap["sink"] == "agent":
+            self._enqueue_agent(cap, text)
+            return
+        t0 = time.time()
+        for rx, fn in self.intents:
+            if rx.search(text):
+                answer = fn()
+                self._send(cap["sink"], f"{text} -> {answer}")
+                log("dispatch", f"intent answered in {time.time()-t0:.2f}s")
+                return
+        self._send(cap["sink"], f"{cap['wake']}: {text}")
+        log("dispatch", f"routed to sink '{cap['sink']}' in {time.time()-t0:.2f}s")
+
+    def _enqueue_agent(self, cap, text):
+        sink = self.sinks.get("agent", {})
+        inbox = os.path.expanduser(sink.get("inbox", "~/omi/agent-inbox"))
+        os.makedirs(inbox, mode=0o700, exist_ok=True)
+        path = os.path.join(inbox, f"cmd-{time.time_ns()}.json")
+        with open(path, "w") as f:
+            json.dump({"ts": round(time.time(), 3), "wake": cap["wake"],
+                       "text": text}, f)
+        log("dispatch", f"enqueued for omi-agent: {os.path.basename(path)}")
+
+    def _intent_backup_status(self):
+        parts = []
+        for unit in ("system-image-backup.service", "personal-backup.service"):
+            r = subprocess.run(
+                ["systemctl", "show", unit, "-p", "Result,ExecMainExitTimestamp"],
+                capture_output=True, text=True)
+            kv = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
+            parts.append(f"{unit.removesuffix('.service')}: "
+                         f"{kv.get('Result', '?')} (last {kv.get('ExecMainExitTimestamp') or 'never'})")
+        return "; ".join(parts)
+
+    def _send(self, sink_name, message):
+        sink = self.sinks.get(sink_name, {})
+        prefix = sink.get("prefix", "[omi]")
+        target = sink.get("target", "")
+        if not target:
+            log("send", f"DRY-RUN ({sink_name} target unset): {prefix} {message}")
+            return
+        if sink_name == "discord":
+            cmd = ["openclaw", "message", "send", "--channel", "discord",
+                   "--target", target, "-m", f"{prefix} {message}"]
+        elif sink_name == "tmux":
+            cmd = ["tmux", "send-keys", "-t", target, message, "Enter"]
+        elif sink_name == "agent":
+            log("send", f"unexpected: agent sink reached _send: {message}")
+            return
+        else:
+            log("send", f"unknown sink '{sink_name}', dropped: {message}")
+            return
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            log("send", f"sink '{sink_name}' failed rc={r.returncode}: {r.stderr.strip()[:200]}")
+        else:
+            log("send", f"delivered via {sink_name}")
+
+
+def selftest():
+    cfg = {"gap_seconds": 2.0, "empty_gap_seconds": 10.0,
+           "max_capture_seconds": 30, "require_is_user": True,
+           "wake": {"goat": {"phrases": ["hey goat"], "sink": "discord",
+                             "fuzzy_tokens": ["banto", "bantu"],
+                             "fuzzy_distance": 1}}}
+    m = Matcher(cfg)
+    # wake + command in one segment
+    done = m.feed("s1", [{"text": "Hey Goat, how's my backup going?", "is_user": True}], 100.0)
+    assert not done and m.has_pending(), "capture should be pending"
+    done = m.tick(103.0)
+    assert len(done) == 1 and "backup" in done[0]["text"], done
+    # phrase split across segments
+    m.feed("s2", [{"text": "so anyway hey", "is_user": True}], 200.0)
+    m.feed("s2", [{"text": "goat restart the sim", "is_user": True}], 200.5)
+    done = m.tick(203.0)
+    assert len(done) == 1 and done[0]["text"] == "restart the sim", done
+    # non-user speech never triggers
+    m.feed("s3", [{"text": "hey goat do evil", "is_user": False}], 300.0)
+    assert not m.has_pending(), "non-user speech must not trigger"
+    # is_user flips False mid-utterance for the SAME speaker (observed live)
+    m.feed("s4", [{"text": "Hey, goat.", "is_user": True, "speaker": "SPEAKER_1"}], 400.0)
+    m.feed("s4", [{"text": "How are my backups?", "is_user": False,
+                   "speaker": "SPEAKER_1"}], 401.0)
+    done = m.tick(404.0)
+    assert len(done) == 1 and "backups" in done[0]["text"], done
+    # a DIFFERENT speaker must not extend the capture
+    m.feed("s5", [{"text": "hey goat", "is_user": True, "speaker": "SPEAKER_1"}], 500.0)
+    m.feed("s5", [{"text": "unrelated chatter", "is_user": False,
+                   "speaker": "SPEAKER_2"}], 501.0)
+    # capture is still empty, so it waits empty_gap before giving up
+    assert not m.tick(504.0), "empty capture must hold past the short gap"
+    done = m.tick(511.0)
+    assert len(done) == 1 and done[0]["text"] == "", done
+    # fuzzy token: ASR spellings the variant list never anticipated
+    for heard in ("bantu", "banto", "bandu", "hey bantu"):
+        mf = Matcher(cfg)
+        mf.feed("f", [{"text": f"{heard} check the disk", "is_user": True}], 600.0)
+        done = mf.tick(603.0)
+        assert len(done) == 1 and done[0]["text"] == "check the disk", (heard, done)
+    # ...but an ordinary word must not trip it
+    mn = Matcher(cfg)
+    mn.feed("n", [{"text": "the bamboo grows fast", "is_user": True}], 700.0)
+    assert not mn.has_pending(), "unrelated word must not trigger"
+    # bare address, command lands 2.3 s later (the ZN-FPGA leases case):
+    # the empty capture must still be open when it arrives
+    ma = Matcher(cfg)
+    ma.feed("a", [{"text": "Banto,", "is_user": True, "speaker": "S0"}], 800.0)
+    assert not ma.tick(802.5), "empty capture must not dispatch at the short gap"
+    ma.feed("a", [{"text": "how many leases are taken on zn-fpga",
+                   "is_user": True, "speaker": "S0"}], 802.31)
+    done = ma.tick(806.0)  # normalize() folds "zn-fpga" to "zn fpga"
+    assert len(done) == 1 and done[0]["text"] == "how many leases are taken on zn fpga", done
+    # intent regex
+    d = Dispatcher({"sinks": {}})
+    assert d.intents[0][0].search("how's my backup going")
+    print("selftest OK")
+
+
+def main():
+    if "--selftest" in sys.argv:
+        selftest()
+        return
+
+    with open(CONFIG_PATH, "rb") as f:
+        cfg = tomllib.load(f)
+
+    import boto3
+    sqs = boto3.client("sqs", region_name=cfg["aws"].get("region", "us-west-2"))
+    queue_url = cfg["aws"]["queue_url"]
+    spool = Spool(cfg["spool"]["dir"])
+    matcher = Matcher(cfg.get("matcher", {}) | {"wake": cfg.get("wake", {})})
+    dispatcher = Dispatcher(cfg)
+    screenpipe = Screenpipe(cfg.get("screenpipe", {}))
+    dedup = Dedup()
+    log("start", f"omi-hub consuming {queue_url}")
+
+    while True:
+        # Short poll cycles while a capture is pending so the segment-gap
+        # timeout fires promptly; lazy 20s long-poll otherwise.
+        wait = 2 if matcher.has_pending() else 20
+        resp = sqs.receive_message(QueueUrl=queue_url, MaxNumberOfMessages=10,
+                                   WaitTimeSeconds=wait)
+        now = time.time()
+        entries = []
+        for msg in resp.get("Messages", []):
+            entries.append({"Id": msg["MessageId"][:80],
+                            "ReceiptHandle": msg["ReceiptHandle"]})
+            try:
+                env = json.loads(msg["Body"])
+            except json.JSONDecodeError:
+                log("intake", "unparseable envelope, spooled raw")
+                spool.append({"received_at": now, "raw": msg["Body"][:10000]})
+                continue
+            key = f'{env.get("session_id")}:{hash(env.get("body", ""))}'
+            if dedup.seen(key):
+                continue
+            try:
+                payload = json.loads(env.get("body") or "null")
+            except json.JSONDecodeError:
+                payload = None
+            spool.append({**env, "payload": payload, "body": None})
+            if env.get("path", "").startswith("/transcript") and isinstance(payload, dict):
+                segments = payload.get("segments", [])
+                screenpipe.post_segments(segments)
+                sid = env.get("session_id") or "default"
+                for cap in matcher.feed(sid, segments, now):
+                    dispatcher.dispatch(cap)
+        if entries:
+            sqs.delete_message_batch(QueueUrl=queue_url, Entries=entries)
+            log("intake", f"{len(entries)} message(s) processed")
+        for cap in matcher.tick(time.time()):
+            dispatcher.dispatch(cap)
+
+
+if __name__ == "__main__":
+    main()

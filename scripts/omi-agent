@@ -1,0 +1,314 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["claude-agent-sdk"]
+# ///
+# omi-agent — persistent Claude Agent SDK session handling Omi voice commands.
+#
+# Consumes command files that omi-hub's "agent" sink drops into the inbox dir,
+# feeds each to a long-lived ClaudeSDKClient session (context persists across
+# commands; recycled daily), and delivers the reply to ~/omi/replies.jsonl +
+# journald, optionally pushing an Omi app notification.
+#
+# Patterns follow zn-ops-2's znops/backends/claude.py (git 2e88d33^ in
+# ~/src/zn-ops): drive receive_messages() through to ResultMessage — never
+# early-return mid-stream — match on ResultMessage.subtype, and report the
+# INCREMENT of the session-cumulative total_cost_usd.
+#
+# Config: [agent] section of /home/brandon/.config/omi-hub/config.toml
+# Design doc: ~/Dropbox/secondbrain/01_projects/ai_wearables/README.md
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import time
+import tomllib
+import unicodedata
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ClaudeSDKClient,
+    ResultMessage,
+    TextBlock,
+)
+
+CONFIG_PATH = Path("~/.config/omi-hub/config.toml").expanduser()
+
+APPEND_PROMPT = """\
+You are the voice-command handler on goatbox-lab. Commands arrive transcribed
+from Brandon's Omi pendant wake-word ("Banto"), so expect ASR noise and missing
+punctuation. Investigate with your tools and answer.
+
+YOUR FINAL MESSAGE IS READ ALOUD to Brandon by Meta AI voice on Ray-Ban
+glasses, which silently refuses to read anything at or above 150 characters,
+and refuses 3+ messages back to back. It is delivered as at most TWO messages
+of 145 characters each, so keep the whole answer under ~280 characters —
+prefer one sentence, two at most. Plain ASCII, no markdown, no newlines, no
+lists, no emoji. Lead with the fact and drop every qualifier. Round numbers
+rather than quoting them precisely ("about 111 gigs free", not "111.3 GiB").
+If the full answer cannot fit, give the most important facts only — the log
+keeps the detail.
+
+If a command is too garbled to act on, say what you heard and ask for a repeat.
+
+You CAN change things — edit files, write scripts, run commands. But your
+instructions arrive as ambient audio with no authentication, so treat every
+request as potentially misheard and act accordingly:
+
+- Prefer the smallest change that satisfies the request, and prefer additive
+  or reversible ones. Anything irreversible (deleting data, force-pushing,
+  rewriting history, changing services) is off the table — do the reversible
+  part and say what you did not do.
+- If a command is ambiguous about WHAT to change, don't guess at a mutation.
+  Report what you found and ask, rather than acting on a coin flip.
+- Prefer git-tracked directories, where a mistake is recoverable.
+- Always say what you changed, in the same breath as the outcome — Brandon
+  cannot see your work, only hear one sentence."""
+
+
+def log(stage: str, msg: str) -> None:
+    print(f"[{stage}] {msg}", flush=True)
+
+
+class OmiAgent:
+    def __init__(self, cfg: dict):
+        self.inbox = Path(cfg.get("inbox", "~/omi/agent-inbox")).expanduser()
+        self.replies = Path(cfg.get("replies", "~/omi/replies.jsonl")).expanduser()
+        self.inbox.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.done = self.inbox / "done"
+        self.done.mkdir(mode=0o700, exist_ok=True)
+        self.cfg = cfg
+        self.client: ClaudeSDKClient | None = None
+        self.session_day: str | None = None
+        self.cost_seen = 0.0
+        self._last_ack = 0.0
+
+    def _options(self) -> ClaudeAgentOptions:
+        return ClaudeAgentOptions(
+            cwd=str(Path.home()),
+            system_prompt={"type": "preset", "preset": "claude_code",
+                           "append": APPEND_PROMPT},
+            permission_mode=self.cfg.get("permission_mode", "dontAsk"),
+            allowed_tools=self.cfg.get(
+                "allowed_tools", ["Read", "Grep", "Glob", "Bash"]),
+            disallowed_tools=self.cfg.get(
+                "disallowed_tools", ["Write", "Edit", "NotebookEdit"]),
+            setting_sources=[],
+            max_turns=self.cfg.get("max_turns", 25),
+            max_budget_usd=self.cfg.get("max_budget_usd", 10.0),
+        )
+
+    async def _ensure_client(self) -> ClaudeSDKClient:
+        # Daily recycle: fresh context each day, memory of today's commands kept.
+        today = time.strftime("%Y-%m-%d")
+        if self.client is not None and self.session_day != today:
+            await self.client.disconnect()
+            self.client = None
+            log("session", "daily recycle — fresh session")
+        if self.client is None:
+            self.client = ClaudeSDKClient(options=self._options())
+            await self.client.connect()
+            self.session_day = today
+            self.cost_seen = 0.0
+            log("session", "connected")
+        return self.client
+
+    async def handle(self, cmd: dict) -> None:
+        text = cmd.get("text", "").strip()
+        if not text:
+            return
+        t0 = time.time()
+        self._ack(text)
+        client = await self._ensure_client()
+        await client.query(text)
+
+        reply, outcome = "", "success"
+        # Drive through to ResultMessage; never early-return mid-stream
+        # (zn-ops-2 RISK-27: a stranded result desyncs every later turn).
+        async for msg in client.receive_response():
+            if isinstance(msg, AssistantMessage):
+                parts = [b.text for b in msg.content if isinstance(b, TextBlock)]
+                if parts:
+                    reply = "\n".join(parts)
+            elif isinstance(msg, ResultMessage):
+                subtype = getattr(msg, "subtype", "success")
+                if subtype != "success":
+                    outcome = subtype
+                total = getattr(msg, "total_cost_usd", None)
+                if total is not None:
+                    step_cost = total - self.cost_seen
+                    self.cost_seen = total
+                else:
+                    step_cost = None
+
+        if not reply:
+            reply = f"(no reply produced; outcome={outcome})"
+        record = {
+            "ts": round(time.time(), 3),
+            "wake": cmd.get("wake"),
+            "command": text,
+            "reply": reply,
+            "outcome": outcome,
+            "duration_s": round(time.time() - t0, 1),
+            "cost_usd": step_cost,
+        }
+        with open(self.replies, "a") as f:
+            f.write(json.dumps(record, separators=(",", ":")) + "\n")
+        log("reply", f"[{outcome} {record['duration_s']}s] {reply[:200]}")
+        self._whatsapp(reply)
+        self._notify(reply)
+
+    # ── WhatsApp delivery (read aloud on Ray-Ban glasses) ──────────────
+    #
+    # Meta AI voice refuses to read a message of 150+ characters (bisected:
+    # 149 ok, 150 fails) and refuses bursts of 3+ consecutive messages —
+    # documented in ~/.hermes/config.yaml platform_hints.whatsapp, learned
+    # the hard way there. So: hard-cap each message at 145 ASCII chars, send
+    # at most 2, and never rely on the bridge's own splitter (it would
+    # happily emit 3+ chunks and go silent).
+
+    @staticmethod
+    def _speakable(text: str) -> str:
+        """Flatten to one line of plain ASCII the glasses will actually read."""
+        text = re.sub(r"[`*_#>\[\]]+", "", text)          # markdown furniture
+        text = text.replace("’", "'").replace("‘", "'")
+        text = text.replace("“", '"').replace("”", '"')
+        text = text.replace("—", " - ").replace("–", "-")
+        text = unicodedata.normalize("NFKD", text)
+        text = text.encode("ascii", "ignore").decode("ascii")
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _chunks(text: str, limit: int, max_msgs: int) -> list[str]:
+        out: list[str] = []
+        while text and len(out) < max_msgs:
+            if len(text) <= limit:
+                out.append(text)
+                text = ""      # fully consumed — nothing was dropped
+                break
+            cut = text.rfind(" ", 0, limit + 1)
+            if cut <= limit // 2:
+                cut = limit
+            out.append(text[:cut].strip())
+            text = text[cut:].strip()
+        if text and len(out) == max_msgs:
+            # Content was dropped — always say so, rather than ending
+            # mid-sentence as though that were the whole answer.
+            if len(out[-1]) > limit - 3:
+                out[-1] = out[-1][: limit - 3].rstrip()
+            out[-1] += "..."
+        return [c for c in out if c]
+
+    def _ack(self, command: str) -> None:
+        """Immediate 'heard you, working on it' so the wait isn't silent."""
+        w = self.cfg.get("whatsapp", {})
+        if not (w.get("enabled") and w.get("ack", True)):
+            return
+        limit = w.get("max_chars", 145)
+        shell = 'You asked: "". Thinking...'
+        cmd = self._speakable(command)
+        room = limit - len(shell)
+        if len(cmd) > room:
+            cmd = cmd[: room - 3].rstrip() + "..."
+        self._whatsapp(f'You asked: "{cmd}". Thinking...', max_messages=1)
+        self._last_ack = time.time()
+
+    def _whatsapp(self, reply: str, max_messages: int | None = None) -> None:
+        w = self.cfg.get("whatsapp", {})
+        if not w.get("enabled"):
+            return
+        chat_id, url = w.get("chat_id"), w.get("url")
+        if not (chat_id and url):
+            log("whatsapp", "enabled but chat_id/url unset; skipped")
+            return
+        if max_messages is None:
+            max_messages = w.get("max_messages", 2)
+            # Meta AI refuses 3+ messages back to back. An ack already spent
+            # one, so a reply landing inside the burst window gets a single
+            # message — otherwise a fast answer would arrive as ack+2 and go
+            # unread. Slow answers are far enough apart to be no burst.
+            since_ack = time.time() - getattr(self, "_last_ack", 0.0)
+            if since_ack < w.get("burst_window_seconds", 20):
+                max_messages = 1
+                log("whatsapp", f"within {since_ack:.0f}s of ack — capping to 1 msg")
+        msgs = self._chunks(self._speakable(reply),
+                            w.get("max_chars", 145), max_messages)
+        for i, m in enumerate(msgs):
+            body = json.dumps({"chatId": chat_id, "message": m}).encode()
+            req = urllib.request.Request(
+                url, data=body, method="POST",
+                headers={"content-type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    ok = json.loads(r.read()).get("success")
+                log("whatsapp", f"sent {i+1}/{len(msgs)} ({len(m)} chars) ok={ok}")
+            except Exception as e:
+                log("whatsapp", f"send failed: {e}")
+                return
+            if i + 1 < len(msgs):
+                time.sleep(1.0)
+
+    def _notify(self, reply: str) -> None:
+        """Optional push notification through the Omi Private App."""
+        n = self.cfg.get("omi_notify", {})
+        app_id, secret, uid = n.get("app_id"), n.get("app_secret"), n.get("uid")
+        if not (app_id and secret and uid):
+            return
+        try:
+            url = (f"https://api.omi.me/v2/integrations/{app_id}/notification"
+                   f"?uid={uid}&message={urllib.parse.quote(reply[:500])}")
+            req = urllib.request.Request(
+                url, method="POST",
+                headers={"Authorization": f"Bearer {secret}"})
+            urllib.request.urlopen(req, timeout=10)
+            log("notify", "omi push sent")
+        except Exception as e:  # notification is best-effort
+            log("notify", f"omi push failed: {e}")
+
+    async def run(self) -> None:
+        log("start", f"omi-agent watching {self.inbox}")
+        while True:
+            pending = sorted(p for p in self.inbox.glob("cmd-*.json"))
+            for path in pending:
+                try:
+                    cmd = json.loads(path.read_text())
+                except json.JSONDecodeError:
+                    log("intake", f"unparseable {path.name}, moved to done/")
+                    path.rename(self.done / path.name)
+                    continue
+                log("intake", f"{path.name}: {cmd.get('text', '')[:120]}")
+                try:
+                    await self.handle(cmd)
+                    path.rename(self.done / path.name)
+                except Exception as e:
+                    # Leave the file for retry after backoff; recycle the
+                    # client so a wedged CLI subprocess doesn't loop forever.
+                    log("error", f"{path.name}: {e!r}; recycling session")
+                    if self.client is not None:
+                        try:
+                            await self.client.disconnect()
+                        except Exception:
+                            pass
+                        self.client = None
+                    await asyncio.sleep(10)
+                    break
+            await asyncio.sleep(1)
+
+
+def main() -> None:
+    cfg = {}
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH, "rb") as f:
+            cfg = tomllib.load(f).get("agent", {})
+    asyncio.run(OmiAgent(cfg).run())
+
+
+if __name__ == "__main__":
+    main()

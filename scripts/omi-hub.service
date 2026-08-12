@@ -1,0 +1,17 @@
+[Unit]
+Description=omi-hub - Omi pendant SQS consumer (spool + wake-word router)
+Documentation=file:///home/brandon/Dropbox/secondbrain/01_projects/ai_wearables/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=brandon
+Environment=HOME=/home/brandon
+Environment=PATH=/home/brandon/.npm-packages/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /home/brandon/scripts/omi-hub
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

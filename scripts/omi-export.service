@@ -1,0 +1,11 @@
+[Unit]
+Description=omi-export - mirror Omi transcripts into ~/Dropbox/Omi Logs
+Documentation=file:///home/brandon/Dropbox/secondbrain/01_projects/ai_wearables/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=brandon
+Environment=HOME=/home/brandon
+ExecStart=/home/brandon/scripts/omi-export

@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""omi-export — mirror Omi's raw transcripts into ~/Dropbox/Omi Logs as Markdown.
+
+Pulls conversations (with full per-segment transcripts), memories, and action
+items from the Omi Developer API and writes them as plain Markdown files.
+Files are content-addressed by hash: a file is only rewritten when its rendered
+content actually changed, so Dropbox is not re-syncing the archive every hour.
+
+Note there is NO raw audio to export — Omi discards recordings after
+processing, so "raw" here means the unabridged transcript text, not source
+audio.
+
+Layout:
+    ~/Dropbox/Omi Logs/
+      conversations/YYYY/MM/YYYY-MM-DD_HHMM_<slug>_<id8>.md
+      memories/YYYY-MM.md
+      action-items/YYYY-MM.md
+      daily/YYYY-MM-DD.md          index of that day's conversations
+
+Usage:
+    omi-export              incremental (stops once pages are all unchanged)
+    omi-export --full       walk the entire history
+    omi-export --dry-run    report what would change, write nothing
+
+Auth: ~/.bna-private/omi-dev-key (an omi_dev_... key; web app -> Developer).
+Design doc: ~/Dropbox/secondbrain/01_projects/ai_wearables/README.md
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+API = "https://api.omi.me/v1/dev"
+KEY_FILE = Path("~/.bna-private/omi-dev-key").expanduser()
+OUT = Path("~/Dropbox/Omi Logs").expanduser()
+STATE = Path("~/.local/state/omi-export/state.json").expanduser()
+PAGE = 100
+# Stop after this many consecutive pages whose files are all already current.
+QUIET_PAGES = 2
+
+
+def log(stage: str, msg: str) -> None:
+    print(f"[{stage}] {msg}", flush=True)
+
+
+def get(path: str, key: str, **params) -> list | dict:
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    url = f"{API}{path}" + (f"?{qs}" if qs else "")
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 3:      # documented 100 req/min
+                wait = 2 ** attempt * 5
+                log("rate", f"429 on {path}; sleeping {wait}s")
+                time.sleep(wait)
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt < 3:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+    return []
+
+
+def local(ts: str | None) -> datetime | None:
+    """Omi timestamps are UTC ISO; render in local time — these are Brandon's
+    days, and an archive filed by UTC date would split evenings in half."""
+    if not ts:
+        return None
+    ts = ts.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(ts).astimezone()
+    except ValueError:
+        return None
+
+
+def slug(text: str, limit: int = 48) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return (s[:limit].rstrip("-") or "untitled")
+
+
+def hhmmss(seconds: float | None) -> str:
+    if seconds is None:
+        return "--:--"
+    s = max(0, int(seconds))
+    return f"{s // 60:02d}:{s % 60:02d}"
+
+
+def render_conversation(c: dict) -> str:
+    st = local(c.get("started_at")) or local(c.get("created_at"))
+    fi = local(c.get("finished_at"))
+    stru = c.get("structured") or {}
+    out = [f"# {stru.get('emoji','')} {stru.get('title') or 'Untitled'}".strip(), ""]
+    when = st.strftime("%Y-%m-%d %H:%M") if st else "unknown"
+    if fi:
+        when += f" – {fi.strftime('%H:%M')} {fi.strftime('%Z')}"
+    out += [f"- **When:** {when}",
+            f"- **Category:** {stru.get('category') or '-'}",
+            f"- **Conversation ID:** `{c.get('id')}`"]
+    if c.get("folder_name"):
+        out.append(f"- **Folder:** {c['folder_name']}")
+    out.append("")
+    if stru.get("overview"):
+        out += ["## Summary", "", stru["overview"], ""]
+    if stru.get("action_items"):
+        out.append("## Action items")
+        out.append("")
+        for a in stru["action_items"]:
+            desc = a.get("description") if isinstance(a, dict) else str(a)
+            done = "x" if (isinstance(a, dict) and a.get("completed")) else " "
+            out.append(f"- [{done}] {desc}")
+        out.append("")
+    if stru.get("events"):
+        out.append("## Events")
+        out.append("")
+        for e in stru["events"]:
+            title = e.get("title") if isinstance(e, dict) else str(e)
+            out.append(f"- {title}")
+        out.append("")
+    segs = c.get("transcript_segments") or []
+    out += ["## Transcript", ""]
+    if not segs:
+        out.append("_(no transcript segments)_")
+    for s in segs:
+        who = s.get("speaker_name") or f"Speaker {s.get('speaker_id', '?')}"
+        out.append(f"**{who}** `{hhmmss(s.get('start'))}` {(s.get('text') or '').strip()}")
+    out.append("")
+    return "\n".join(out)
+
+
+def conversation_path(c: dict) -> Path:
+    st = local(c.get("started_at")) or local(c.get("created_at")) or datetime.now()
+    stru = c.get("structured") or {}
+    name = (f"{st.strftime('%Y-%m-%d_%H%M')}_{slug(stru.get('title'))}"
+            f"_{(c.get('id') or '')[:8]}.md")
+    return OUT / "conversations" / st.strftime("%Y") / st.strftime("%m") / name
+
+
+def render_month(kind: str, items: list[dict], month: str) -> str:
+    """One rollup file per month for memories / action items."""
+    out = [f"# {kind} — {month}", ""]
+    by_day: dict[str, list[dict]] = {}
+    for it in items:
+        d = local(it.get("created_at"))
+        by_day.setdefault(d.strftime("%Y-%m-%d") if d else "unknown", []).append(it)
+    for day in sorted(by_day, reverse=True):
+        out += [f"## {day}", ""]
+        for it in by_day[day]:
+            if kind == "Memories":
+                tags = ", ".join(it.get("tags") or [])
+                line = f"- ({it.get('category','?')}) {it.get('content','').strip()}"
+                if tags:
+                    line += f"  `{tags}`"
+            else:
+                done = "x" if it.get("completed") else " "
+                line = f"- [{done}] {it.get('description','').strip()}"
+                due = local(it.get("due_at"))
+                if due:
+                    line += f"  _(due {due.strftime('%Y-%m-%d %H:%M')})_"
+                if it.get("conversation_id"):
+                    line += f"  `{it['conversation_id'][:8]}`"
+            out.append(line)
+        out.append("")
+    return "\n".join(out)
+
+
+def render_daily(day: str, convs: list[dict]) -> str:
+    out = [f"# {day}", "", f"{len(convs)} conversation(s).", ""]
+    for c in sorted(convs, key=lambda x: x.get("started_at") or ""):
+        st = local(c.get("started_at")) or local(c.get("created_at"))
+        stru = c.get("structured") or {}
+        # daily/ sits one level under OUT, so link up and back down
+        rel = conversation_path(c).relative_to(OUT).as_posix()
+        out.append(f"## {st.strftime('%H:%M') if st else '--:--'} "
+                   f"{stru.get('title') or 'Untitled'}")
+        out.append("")
+        if stru.get("overview"):
+            out += [stru["overview"], ""]
+        out += [f"[full transcript](../{rel})", ""]
+    return "\n".join(out)
+
+
+def write_if_changed(path: Path, content: str, state: dict, dry: bool) -> bool:
+    h = hashlib.sha256(content.encode()).hexdigest()[:16]
+    key = str(path.relative_to(OUT))
+    if state.get("files", {}).get(key) == h and path.exists():
+        return False
+    if not dry:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        state.setdefault("files", {})[key] = h
+    return True
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--full", action="store_true",
+                    help="walk the entire history instead of stopping early")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    if not KEY_FILE.exists():
+        print(f"missing API key at {KEY_FILE}", file=sys.stderr)
+        return 1
+    key = KEY_FILE.read_text().strip()
+
+    state = {}
+    if STATE.exists():
+        try:
+            state = json.loads(STATE.read_text())
+        except json.JSONDecodeError:
+            log("state", "unreadable state file; treating as first run")
+
+    written = 0
+    by_day: dict[str, list[dict]] = {}
+    quiet = 0
+    offset = 0
+    total = 0
+    while True:
+        page = get("/user/conversations", key, limit=PAGE, offset=offset,
+                   include_transcript="true")
+        if not isinstance(page, list) or not page:
+            break
+        total += len(page)
+        changed_here = 0
+        for c in page:
+            st = local(c.get("started_at")) or local(c.get("created_at"))
+            if st:
+                by_day.setdefault(st.strftime("%Y-%m-%d"), []).append(c)
+            if write_if_changed(conversation_path(c), render_conversation(c),
+                                state, args.dry_run):
+                changed_here += 1
+        written += changed_here
+        log("conversations", f"offset {offset}: {len(page)} fetched, "
+                             f"{changed_here} new/changed")
+        quiet = quiet + 1 if changed_here == 0 else 0
+        if not args.full and quiet >= QUIET_PAGES:
+            log("conversations", "pages are current; stopping early "
+                                 "(use --full to walk everything)")
+            break
+        # Advance by what the server actually returned, never by the limit we
+        # asked for: with include_transcript=true it caps pages at 25 whatever
+        # `limit` says, and trusting our own number stops the walk at page one.
+        offset += len(page)
+
+    for day, convs in by_day.items():
+        if write_if_changed(OUT / "daily" / f"{day}.md",
+                            render_daily(day, convs), state, args.dry_run):
+            written += 1
+
+    for kind, path_seg, endpoint in (("Memories", "memories", "/user/memories"),
+                                     ("Action items", "action-items",
+                                      "/user/action-items")):
+        items, offset = [], 0
+        while True:
+            page = get(endpoint, key, limit=PAGE, offset=offset)
+            if not isinstance(page, list) or not page:
+                break
+            items += page
+            offset += len(page)   # server may cap the page below our limit
+        months: dict[str, list[dict]] = {}
+        for it in items:
+            d = local(it.get("created_at"))
+            months.setdefault(d.strftime("%Y-%m") if d else "unknown", []).append(it)
+        for month, group in months.items():
+            if write_if_changed(OUT / path_seg / f"{month}.md",
+                                render_month(kind, group, month), state,
+                                args.dry_run):
+                written += 1
+        log(path_seg, f"{len(items)} item(s) across {len(months)} month file(s)")
+
+    if not args.dry_run:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        state["last_run"] = datetime.now(timezone.utc).isoformat()
+        STATE.write_text(json.dumps(state, indent=1))
+    log("done", f"{total} conversation(s) seen, {written} file(s) "
+                f"{'would change' if args.dry_run else 'written'}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

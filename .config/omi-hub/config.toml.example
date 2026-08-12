@@ -1,0 +1,128 @@
+# EXAMPLE config for omi-hub / omi-agent — copy to config.toml and fill in.
+# Real values (AWS account, WhatsApp id, host) are deliberately NOT in this
+# public repo; the live config.toml is gitignored.
+# Secrets are never inline — every key is referenced by file path under
+# ~/.bna-private/ (omi-webhook-token, screenpipe-api-key, omi-dev-key).
+
+# omi-hub configuration (goatbox-lab)
+# Consumed by ~/scripts/omi-hub. Design: secondbrain 01_projects/ai_wearables.
+
+[aws]
+queue_url = "https://sqs.<REGION>.amazonaws.com/<AWS_ACCOUNT_ID>/bna-omi-transcript-queue"
+region = "us-west-2"
+
+[spool]
+dir = "/home/brandon/omi/spool"
+
+[matcher]
+# Wall-clock patience. Omi's realtime stream LAGS AND BURSTS: one continuous
+# sentence arrived 11.1 s apart on the wire (2026-08-05 "A Banto ..."), so
+# these must absorb delivery lag, not just speaking pauses. Continuation is
+# judged by speech_gap_seconds below; these only decide when to give up.
+gap_seconds = 8.0
+# A bare address with no command yet costs nothing to wait on.
+empty_gap_seconds = 25.0
+# Gap in SPEECH time (segment start vs previous end) that means a genuinely
+# new utterance. Immune to delivery lag — 0.62 s in the case above.
+speech_gap_seconds = 3.0
+max_capture_seconds = 30
+# ⚠ OFF because Omi's is_user is unreliable: within one hour it was True on
+# the wake segment and False on the command half (2026-08-05 22:08), then
+# False for an entire utterance in Brandon's own voice (22:33) — and the
+# SPEAKER_n labels are per-conversation, so they can't substitute.
+# The real gates are the distinctive wake word and the agent's read-only
+# tool policy. Revisit if Speech Profile training makes is_user trustworthy.
+require_is_user = false
+
+# Wake words. ASR mangles proper nouns -- list observed variants, they cost
+# nothing. Matching is on normalized text (lowercased, punctuation stripped).
+[wake.banto]
+# "Banto" replaced "goat" 2026-08-05: one syllable ending in an unvoiced stop
+# sits in a crowded neighbourhood (good/coat/goad/ghost) and ASR kept picking
+# a likelier neighbour. Omi consistently hears Banto as "Bantu" — both spellings
+# are listed, and fuzzy_tokens catches renderings no list anticipated.
+# Bare word works too; the "hey" prefix is optional.
+phrases = ["hey banto", "hey bantu", "banto", "bantu"]
+fuzzy_tokens = ["banto", "bantu"]
+fuzzy_distance = 1
+sink = "agent"
+
+[wake.claude]
+phrases = ["hey claude", "hey clod", "hey cloud"]
+sink = "tmux"
+
+[sinks.discord]
+# Set to "channel:<id>" once the #omi-voice channel exists.
+# Empty target = dry-run: dispatches are logged to journald only.
+target = ""
+prefix = "[omi]"
+
+[sinks.tmux]
+# Set to "<session>:<window>" of the Claude Code pane to inject into.
+# Empty target = dry-run.
+target = ""
+prefix = "[omi]"
+
+[screenpipe]
+# Transcript index on EC2 (bna-omi-screenpipe stack). Best-effort: every
+# transcript segment is POSTed to /add; failures drop (spool is canonical).
+enabled = true
+url = "https://<YOUR_SCREENPIPE_HOST>"
+api_key_file = "/home/brandon/.bna-private/screenpipe-api-key"
+device_name = "omi-pendant"
+
+[sinks.agent]
+# omi-agent daemon inbox (Claude Agent SDK persistent session).
+# All captures for agent-routed wakes go here, intents included.
+inbox = "/home/brandon/omi/agent-inbox"
+
+[agent]
+# omi-agent daemon settings (~/scripts/omi-agent).
+inbox = "/home/brandon/omi/agent-inbox"
+replies = "/home/brandon/omi/replies.jsonl"
+# dontAsk (not acceptEdits): anything unlisted is DENIED rather than prompting
+# a human who isn't there. Nothing can hang waiting for approval.
+permission_mode = "dontAsk"
+allowed_tools = ["Read", "Grep", "Glob", "Bash", "Write", "Edit",
+                 "NotebookEdit", "WebSearch", "WebFetch", "TodoWrite"]
+# ⚠ The trigger is ambient audio with NO authentication (is_user proved
+# unreliable and is off), so a bystander — or a false wake like "panto" — can
+# issue commands. These patterns fence off the irreversible: data destruction,
+# privilege escalation, and anything that leaves the machine (push/publish).
+# The agent already runs as brandon with no passwordless sudo, so the blast
+# radius is Brandon's own files; this list keeps that recoverable.
+disallowed_tools = [
+  "Bash(rm:*)", "Bash(rmdir:*)", "Bash(shred:*)", "Bash(dd:*)",
+  "Bash(mkfs:*)", "Bash(sudo:*)", "Bash(su:*)", "Bash(chown:*)",
+  "Bash(chmod:777*)", "Bash(git push:*)", "Bash(git reset --hard:*)",
+  "Bash(git clean:*)", "Bash(yadm push:*)", "Bash(systemctl:*)",
+  "Bash(kill:*)", "Bash(pkill:*)", "Bash(curl:*-X POST*)",
+  "Bash(aws:*delete*)", "Bash(aws:*terminate*)", "Bash(lvremove:*)",
+  "Bash(vgremove:*)", "Bash(mdadm:*)",
+]
+max_turns = 25
+max_budget_usd = 10.0                # per daily session, SDK-native cap
+
+[agent.whatsapp]
+# Replies go to Brandon's own WhatsApp via the local Hermes bridge, where
+# Meta AI voice reads them aloud on the Ray-Ban glasses.
+# ⚠ Meta AI silently refuses messages >=150 chars (bisected: 149 ok, 150 fails)
+# and bursts of 3+ messages — see ~/.hermes/config.yaml platform_hints.whatsapp.
+# Hence 145/2. Do not raise these without re-bisecting.
+enabled = true
+url = "http://127.0.0.1:3000/send"
+chat_id = "<YOUR_WHATSAPP_ID>@lid"   # from ~/.hermes/config.yaml platforms.whatsapp.home_channel
+max_chars = 145
+max_messages = 2
+# Immediate 'You asked: "...". Thinking...' so the wait isn't silent.
+ack = true
+# A reply landing this soon after the ack is capped to ONE message, so an
+# ack + reply never becomes the 3-message burst Meta AI refuses to read.
+burst_window_seconds = 20
+
+# Optional Omi push notification for replies (fill in once the Private
+# Integration App exists; all three required to enable):
+# [agent.omi_notify]
+# app_id = ""
+# app_secret = ""
+# uid = ""
