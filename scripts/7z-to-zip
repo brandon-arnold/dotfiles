@@ -1,0 +1,29 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $(basename "$0") <folder>"
+    exit 1
+fi
+
+dir="$(realpath "$1")"
+
+if [ ! -d "$dir" ]; then
+    echo "Error: '$dir' is not a directory"
+    exit 1
+fi
+
+for f in "$dir"/*.7z; do
+    [ -e "$f" ] || { echo "No .7z files found in '$dir'"; exit 1; }
+
+    base="$(basename "$f" .7z)"
+    zipfile="$dir/$base.zip"
+    tmpdir="$(mktemp -d)"
+
+    echo "Converting: $base.7z -> $base.zip"
+    7z x -o"$tmpdir" "$f" > /dev/null
+    (cd "$tmpdir" && zip -r "$zipfile" . > /dev/null)
+    rm -rf "$tmpdir"
+done
+
+echo "Done."

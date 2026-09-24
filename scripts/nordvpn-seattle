@@ -1,0 +1,5 @@
+#!/bin/bash
+
+nordvpn connect
+
+# nordvpn disconnect

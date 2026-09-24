@@ -1,0 +1,43 @@
+#!/bin/sh
+# Pin the FW16 hardware speaker at full gain and route playback through the
+# digital-volume loopback sink (softvol_speaker, created by the PipeWire drop-in
+# ~/.config/pipewire/pipewire.conf.d/51-softvol-speaker.conf).
+#
+# Why: the ALC285 speaker amp loses bass under ANY analog attenuation. Keeping the
+# hardware sink at 100% pins the codec amps at full; the loopback then attenuates
+# in the digital domain, so the speakers stay full-range at low volumes.
+# See memory: audio-tinny-low-volume-fix. fw16-specific (PCI path).
+
+HW="alsa_output.pci-0000_c3_00.6.HiFi__Speaker__sink"
+SOFT="softvol_speaker"
+
+# Wait up to ~15s for both the hardware sink and the loopback sink to register.
+i=0
+while [ "$i" -lt 30 ]; do
+  sinks=$(pactl list short sinks 2>/dev/null)
+  case "$sinks" in
+    *"$SOFT"*) case "$sinks" in *"$HW"*) break ;; esac ;;
+  esac
+  sleep 0.5
+  i=$((i + 1))
+done
+
+# Hardware sink always at full -> codec amps (Master/Speaker/Bass Speaker) pinned max.
+pactl set-sink-volume "$HW" 100%
+pactl set-sink-mute "$HW" 0
+
+# Pin the loopback's playback end to the hardware speaker. target.object in the
+# drop-in is only a hint; stream-restore can override it (e.g. onto a USB headset),
+# so force it here by node name.
+loop_id=$(pactl list sink-inputs 2>/dev/null | awk '
+  /^Sink Input #/ { id = substr($3, 2) }
+  /node\.name = "softvol_speaker\.out"/ { print id }')
+[ -n "$loop_id" ] && pactl move-sink-input "$loop_id" "$HW"
+
+# Make the digital-volume loopback the default and pull real app streams onto it
+# (skip the loopback's own playback end, which must stay on the hardware speaker).
+pactl set-default-sink "$SOFT"
+for in in $(pactl list short sink-inputs 2>/dev/null | awk '{print $1}'); do
+  [ "$in" = "$loop_id" ] && continue
+  pactl move-sink-input "$in" "$SOFT" 2>/dev/null
+done

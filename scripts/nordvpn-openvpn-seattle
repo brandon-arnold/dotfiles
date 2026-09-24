@@ -1,0 +1,3 @@
+#!/bin/bash
+
+sudo openvpn --config /home/brandon/.bna-private/us8243.nordvpn.com.tcp.ovpn

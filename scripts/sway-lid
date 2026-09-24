@@ -1,0 +1,25 @@
+#!/bin/sh
+# sway-lid {close|open} — manage the internal panel (eDP-1) on laptop lid events.
+#
+# logind is configured to ignore the lid switch (HandleLidSwitch and
+# HandleLidSwitchExternalPower = ignore), so closing the lid no longer suspends.
+# This script is what turns the internal screen off/on instead.
+#
+# It only acts when UNDOCKED. When an external output is active we're docked, and
+# kanshi owns eDP-1's state (its dock profile disables it) — so we leave it alone.
+set -eu
+
+panel=eDP-1
+action=${1:-}
+
+# Count active outputs other than the internal panel. >0 means we're docked.
+externals=$(swaymsg -t get_outputs | jq --arg p "$panel" \
+    '[.[] | select(.name != $p and .active)] | length')
+
+[ "$externals" -gt 0 ] && exit 0   # docked: leave the panel to kanshi
+
+case "$action" in
+    close) swaymsg "output $panel dpms off" ;;
+    open)  swaymsg "output $panel dpms on"  ;;
+    *) echo "usage: $0 {close|open}" >&2; exit 1 ;;
+esac

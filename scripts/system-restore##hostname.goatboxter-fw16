@@ -1,0 +1,590 @@
+#!/bin/bash
+
+#####################################################
+##
+## system-restore
+##
+## Bare-metal restoration of goatboxter-fw16 from a system-backup archive.
+## Run from Arch Linux live USB. Expects the backup directory to be accessible
+## (mounted NAS, external drive, etc.).
+##
+## This script is interactive — it confirms before each destructive step.
+## It can be re-run from any phase if a step fails.
+##
+## Hardware assumption: Framework Laptop 16 with two NVMe drives:
+##   - Primary (4TB): EFI + swap + LVM (fw16-vg)
+##   - Secondary (2TB): LVM (fw16-2-vg)
+##
+## UUID strategy:
+##   - PARTUUIDs: restored by sfdisk from backup partition tables
+##   - LVM UUIDs: restored by vgcfgrestore from backup LVM metadata
+##   - Filesystem UUIDs: restored by fsarchiver (ext4) and mkswap -U (swap)
+##   - EFI boot entry: created fresh with efibootmgr using restored PARTUUIDs
+##
+## Because all UUIDs are restored to match the originals, /etc/fstab,
+## mkinitcpio, and rEFInd config inside the backup should work unchanged.
+##
+#####################################################
+
+set -euo pipefail
+
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[1;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# --yes skips all ten confirmations. Gated behind the long flag name on
+# purpose: this wipes both drives with no further prompting.
+ASSUME_YES=0
+_args=()
+for _arg in "$@"; do
+    case "$_arg" in
+        --yes-i-understand-this-wipes-both-drives) ASSUME_YES=1 ;;
+        --yes) echo "Use --yes-i-understand-this-wipes-both-drives"; exit 2 ;;
+        *) _args+=("$_arg") ;;
+    esac
+done
+set -- "${_args[@]}"
+
+confirm() {
+    local msg="$1"
+    echo ""
+    echo -e "${YELLOW}${msg}${NC}"
+    if [[ "$ASSUME_YES" == 1 ]]; then
+        echo "Continue? [y/N] y   (--yes-i-understand-this-wipes-both-drives)"
+        return 0
+    fi
+    echo -n "Continue? [y/N] "
+    read -r ans
+    if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+}
+
+info()  { echo -e "${CYAN}>> $*${NC}"; }
+ok()    { echo -e "${GREEN}   OK${NC}"; }
+warn()  { echo -e "${YELLOW}   WARNING: $*${NC}"; }
+fatal() { echo -e "${RED}   FATAL: $*${NC}"; exit 1; }
+
+phase() {
+    echo ""
+    echo -e "${BOLD}============================================================${NC}"
+    echo -e "${BOLD}  PHASE $1: $2${NC}"
+    echo -e "${BOLD}============================================================${NC}"
+}
+
+#####################################################
+## Phase 0: Validate backup directory
+#####################################################
+
+phase 0 "Locate and validate backup"
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage: $0 /path/to/backup/YYYYMMDD-HHhMM"
+    echo ""
+    echo "The backup directory should contain:"
+    echo "  boot.fsa, arch-root.fsa, arch-home.fsa, arch-vm2.fsa"
+    echo "  sfdisk-partition-table__*.txt"
+    echo "  etc-lvm-backup-fw16-vg, etc-lvm-backup-fw16-2-vg"
+    echo "  blkid.txt"
+    echo ""
+    echo "Typical usage from Arch live USB:"
+    echo "  1. Mount NAS:  mount -t nfs truenas.bant:/mnt/tank/... /mnt/nas"
+    echo "  2. Run:        $0 /mnt/nas/PcBackup/goatboxter-fw16/20260301-02h00"
+    exit 1
+fi
+
+BACKDIR="$1"
+
+if [[ ! -d "$BACKDIR" ]]; then
+    fatal "Backup directory not found: $BACKDIR"
+fi
+
+REQUIRED_FILES=(
+    "boot.fsa"
+    "arch-root.fsa"
+    "arch-home.fsa"
+    "arch-vm2.fsa"
+    "etc-lvm-backup-fw16-vg"
+    "etc-lvm-backup-fw16-2-vg"
+    "blkid.txt"
+)
+
+info "Checking backup contents in $BACKDIR"
+MISSING=0
+for f in "${REQUIRED_FILES[@]}"; do
+    if [[ ! -f "$BACKDIR/$f" ]]; then
+        warn "Missing: $f"
+        MISSING=1
+    fi
+done
+
+# Find sfdisk files (device IDs will differ on new hardware, but we need the content)
+SFDISK_FILES=("$BACKDIR"/sfdisk-partition-table__*.txt)
+if [[ ${#SFDISK_FILES[@]} -lt 2 ]]; then
+    warn "Expected 2 sfdisk partition table files, found ${#SFDISK_FILES[@]}"
+    MISSING=1
+fi
+
+if [[ $MISSING -eq 1 ]]; then
+    fatal "Backup is incomplete. Cannot proceed."
+fi
+
+#####################################################
+## Verify checksums
+#####################################################
+
+info "Verifying archive checksums"
+CHECKSUM_FAIL=0
+for fsa in boot.fsa arch-root.fsa arch-home.fsa arch-vm2.fsa; do
+    if [[ -f "$BACKDIR/${fsa}.sha256" ]]; then
+        if (cd "$BACKDIR" && sha256sum -c "${fsa}.sha256" --quiet 2>/dev/null); then
+            echo "   $fsa: checksum OK"
+        else
+            warn "$fsa: CHECKSUM MISMATCH"
+            CHECKSUM_FAIL=1
+        fi
+    else
+        warn "$fsa: no checksum file found (skipping verification)"
+    fi
+done
+
+if [[ $CHECKSUM_FAIL -eq 1 ]]; then
+    fatal "Checksum verification failed. Backup may be corrupt."
+fi
+ok
+
+#####################################################
+## Extract UUIDs from backup metadata
+#####################################################
+
+info "Extracting UUIDs from backup metadata"
+
+# Swap UUID from blkid.txt (the swap partition line)
+SWAP_UUID=$(grep 'TYPE="swap"' "$BACKDIR/blkid.txt" | sed -n 's/.*\bUUID="\([^"]*\)".*/\1/p' | head -1)
+if [[ -z "$SWAP_UUID" ]]; then
+    warn "Could not extract swap UUID from blkid.txt"
+    warn "You will need to update /etc/fstab swap entry after restore"
+else
+    echo "   Swap UUID: $SWAP_UUID"
+fi
+
+# EFI partition UUID from blkid.txt
+BOOT_UUID=$(grep 'TYPE="vfat"' "$BACKDIR/blkid.txt" | grep -i '5F7D-3EB0\|boot\|nvme.*p1' | sed -n 's/.*\bUUID="\([^"]*\)".*/\1/p' | head -1)
+echo "   Boot UUID: ${BOOT_UUID:-will be restored by fsarchiver}"
+
+echo ""
+echo "   Filesystem UUIDs (restored automatically by fsarchiver):"
+echo "   LVM UUIDs (restored automatically by vgcfgrestore):"
+echo "   PARTUUIDs (restored automatically by sfdisk):"
+ok
+
+#####################################################
+## Phase 1: Identify target drives
+#####################################################
+
+phase 1 "Identify target NVMe drives"
+
+echo ""
+echo -e "${BOLD}Available NVMe devices:${NC}"
+echo ""
+lsblk -d -o NAME,SIZE,MODEL,SERIAL -p | grep nvme || true
+echo ""
+
+echo "Map each drive to its role. The original layout was:"
+echo "  Primary   (4TB): EFI + swap + LVM (fw16-vg)     — Arch root, home, VMs"
+echo "  Secondary (2TB): LVM (fw16-2-vg)                — backups, downloads"
+echo ""
+
+read -rp "Primary drive device path   (e.g., /dev/nvme0n1): " PRIMARY_DRIVE
+read -rp "Secondary drive device path (e.g., /dev/nvme1n1): " SECONDARY_DRIVE
+
+if [[ ! -b "$PRIMARY_DRIVE" ]]; then
+    fatal "Not a block device: $PRIMARY_DRIVE"
+fi
+if [[ ! -b "$SECONDARY_DRIVE" ]]; then
+    fatal "Not a block device: $SECONDARY_DRIVE"
+fi
+
+if [[ "$PRIMARY_DRIVE" == "$SECONDARY_DRIVE" ]]; then
+    fatal "Primary and secondary drives must be different devices"
+fi
+
+# Show what we're about to do
+echo ""
+echo -e "${BOLD}Drive mapping:${NC}"
+echo "  $PRIMARY_DRIVE   -> primary (EFI + swap + fw16-vg)"
+echo "  $SECONDARY_DRIVE -> secondary (fw16-2-vg)"
+
+confirm "This will DESTROY ALL DATA on both drives. Are you sure?"
+
+#####################################################
+## Phase 2: Restore partition tables
+#####################################################
+
+phase 2 "Restore partition tables (sfdisk)"
+
+# Identify which sfdisk file is for the primary (3-partition, has EFI+swap+LVM)
+# and which is for the secondary (1-partition, LVM only).
+# We detect by counting partition lines in each file.
+
+PRIMARY_SFDISK=""
+SECONDARY_SFDISK=""
+
+for sf in "${SFDISK_FILES[@]}"; do
+    PART_COUNT=$(grep -c "^${sf##*/}" "$sf" 2>/dev/null || grep -c "^/dev/" "$sf" 2>/dev/null || echo 0)
+    if [[ $PART_COUNT -ge 3 ]]; then
+        PRIMARY_SFDISK="$sf"
+    elif [[ $PART_COUNT -ge 1 ]]; then
+        SECONDARY_SFDISK="$sf"
+    fi
+done
+
+# Fallback: if auto-detection failed, let user pick
+if [[ -z "$PRIMARY_SFDISK" || -z "$SECONDARY_SFDISK" ]]; then
+    warn "Could not auto-detect which sfdisk file maps to which drive."
+    echo "Available sfdisk files:"
+    for i in "${!SFDISK_FILES[@]}"; do
+        echo "  [$i] ${SFDISK_FILES[$i]}"
+        echo "       Partitions: $(grep -c '^/dev/' "${SFDISK_FILES[$i]}" 2>/dev/null || echo '?')"
+    done
+    read -rp "Which file is for the PRIMARY drive (3 partitions)? [0/1]: " idx
+    PRIMARY_SFDISK="${SFDISK_FILES[$idx]}"
+    if [[ "$idx" == "0" ]]; then
+        SECONDARY_SFDISK="${SFDISK_FILES[1]}"
+    else
+        SECONDARY_SFDISK="${SFDISK_FILES[0]}"
+    fi
+fi
+
+echo ""
+echo "  Primary sfdisk:   $PRIMARY_SFDISK"
+echo "  Secondary sfdisk: $SECONDARY_SFDISK"
+
+confirm "Restore partition tables to $PRIMARY_DRIVE and $SECONDARY_DRIVE?"
+
+info "Restoring primary partition table"
+sfdisk "$PRIMARY_DRIVE" < "$PRIMARY_SFDISK"
+ok
+
+info "Restoring secondary partition table"
+sfdisk "$SECONDARY_DRIVE" < "$SECONDARY_SFDISK"
+ok
+
+# Re-read partition tables
+info "Re-reading partition tables"
+partprobe "$PRIMARY_DRIVE"
+partprobe "$SECONDARY_DRIVE"
+sleep 2
+ok
+
+# Determine partition device names (handles both nvme0n1p1 and sda1 styles)
+if [[ "$PRIMARY_DRIVE" == *nvme* ]]; then
+    P_PFX="${PRIMARY_DRIVE}p"
+else
+    P_PFX="${PRIMARY_DRIVE}"
+fi
+
+if [[ "$SECONDARY_DRIVE" == *nvme* ]]; then
+    S_PFX="${SECONDARY_DRIVE}p"
+else
+    S_PFX="${SECONDARY_DRIVE}"
+fi
+
+BOOT_PART="${P_PFX}1"
+SWAP_PART="${P_PFX}2"
+LVM_PRIMARY_PART="${P_PFX}3"
+LVM_SECONDARY_PART="${S_PFX}1"
+
+echo ""
+echo -e "${BOLD}Partition mapping:${NC}"
+echo "  EFI/boot:       $BOOT_PART"
+echo "  Swap:           $SWAP_PART"
+echo "  LVM (fw16-vg):  $LVM_PRIMARY_PART"
+echo "  LVM (fw16-2-vg):$LVM_SECONDARY_PART"
+
+#####################################################
+## Phase 3: Create swap
+#####################################################
+
+phase 3 "Initialize swap partition"
+
+if [[ -n "$SWAP_UUID" ]]; then
+    info "Creating swap with original UUID: $SWAP_UUID"
+    confirm "Format $SWAP_PART as swap?"
+    mkswap -U "$SWAP_UUID" "$SWAP_PART"
+    ok
+else
+    info "Creating swap (UUID unknown — /etc/fstab will need manual update)"
+    confirm "Format $SWAP_PART as swap?"
+    mkswap "$SWAP_PART"
+    warn "Note the UUID above and update /etc/fstab after restore"
+    ok
+fi
+
+#####################################################
+## Phase 4: Set up LVM
+#####################################################
+
+phase 4 "Restore LVM layout"
+
+confirm "Create LVM physical volumes on $LVM_PRIMARY_PART and $LVM_SECONDARY_PART?"
+
+info "Creating physical volumes"
+pvcreate -ff "$LVM_PRIMARY_PART"
+pvcreate -ff "$LVM_SECONDARY_PART"
+ok
+
+# Restore VG metadata (this recreates VGs and LVs with original UUIDs)
+# vgcfgrestore needs the PV to already exist. It restores the VG, all LVs,
+# and their UUIDs from the metadata file.
+
+info "Restoring fw16-vg metadata"
+vgcfgrestore -f "$BACKDIR/etc-lvm-backup-fw16-vg" fw16-vg
+ok
+
+info "Restoring fw16-2-vg metadata"
+vgcfgrestore -f "$BACKDIR/etc-lvm-backup-fw16-2-vg" fw16-2-vg
+ok
+
+info "Activating volume groups"
+vgchange -ay fw16-vg
+vgchange -ay fw16-2-vg
+ok
+
+echo ""
+echo -e "${BOLD}Restored LVM layout:${NC}"
+lvs fw16-vg fw16-2-vg
+echo ""
+
+#####################################################
+## Phase 5: Restore filesystems
+#####################################################
+
+phase 5 "Restore filesystems from fsarchiver"
+
+echo "This will restore 4 filesystem images. Each restore preserves the"
+echo "original filesystem UUIDs, so /etc/fstab will work without changes."
+echo ""
+echo "Archives to restore:"
+echo "  boot.fsa       -> $BOOT_PART"
+echo "  arch-root.fsa  -> /dev/fw16-vg/arch-root"
+echo "  arch-home.fsa  -> /dev/fw16-vg/arch-home"
+echo "  arch-vm2.fsa   -> /dev/fw16-vg/arch-vm2"
+echo ""
+echo "Volumes NOT restored (must be formatted manually if needed):"
+echo "  arch-steam, arch-dropbox, artix-*, arch-backup, downloads"
+
+confirm "Restore all filesystem images?"
+
+info "Restoring boot partition"
+fsarchiver restfs "$BACKDIR/boot.fsa" id=0,dest="$BOOT_PART"
+ok
+
+info "Restoring arch-root"
+fsarchiver restfs "$BACKDIR/arch-root.fsa" id=0,dest=/dev/fw16-vg/arch-root
+ok
+
+info "Restoring arch-home"
+fsarchiver restfs "$BACKDIR/arch-home.fsa" id=0,dest=/dev/fw16-vg/arch-home
+ok
+
+info "Restoring arch-vm2"
+fsarchiver restfs "$BACKDIR/arch-vm2.fsa" id=0,dest=/dev/fw16-vg/arch-vm2
+ok
+
+#####################################################
+## Phase 6: Format non-backed-up volumes
+#####################################################
+
+phase 6 "Format non-backed-up volumes"
+
+echo "The following LVs exist but were not backed up. They need fresh filesystems"
+echo "for fstab mount points to work (otherwise boot will stall on missing mounts)."
+echo ""
+echo "  /dev/fw16-vg/arch-steam    -> /home/brandon/steam"
+echo "  /dev/fw16-vg/arch-dropbox  -> /home/brandon/Dropbox"
+echo "  /dev/fw16-2-vg/arch-backup -> /mnt/backup"
+echo "  /dev/fw16-2-vg/downloads   -> /home/brandon/Downloads"
+echo ""
+echo "Artix volumes will be skipped (not mounted on Arch by default)."
+echo ""
+echo "These will be formatted as ext4. Data on them is gone (it was excluded"
+echo "from backups or is restorable from Dropbox/NAS)."
+
+# Extract original UUIDs for non-backed-up volumes from blkid.txt
+extract_uuid() {
+    local search="$1"
+    grep "$search" "$BACKDIR/blkid.txt" | sed -n 's/.*\bUUID="\([^"]*\)".*/\1/p' | head -1
+}
+
+STEAM_UUID=$(extract_uuid "arch--steam")
+DROPBOX_UUID=$(extract_uuid "arch--dropbox")
+BACKUP_UUID=$(extract_uuid "arch--backup")
+DOWNLOADS_UUID=$(extract_uuid "downloads")
+
+confirm "Format non-backed-up volumes with original UUIDs?"
+
+format_ext4_with_uuid() {
+    local dev="$1" uuid="$2"
+    if [[ -n "$uuid" ]]; then
+        info "Formatting $dev (UUID=$uuid)"
+        mkfs.ext4 -U "$uuid" "$dev"
+    else
+        info "Formatting $dev (UUID not found in backup — fstab may need update)"
+        mkfs.ext4 "$dev"
+    fi
+    ok
+}
+
+format_ext4_with_uuid /dev/fw16-vg/arch-steam "$STEAM_UUID" "arch-steam"
+format_ext4_with_uuid /dev/fw16-vg/arch-dropbox "$DROPBOX_UUID" "arch-dropbox"
+format_ext4_with_uuid /dev/fw16-2-vg/arch-backup "$BACKUP_UUID" "arch-backup"
+format_ext4_with_uuid /dev/fw16-2-vg/downloads "$DOWNLOADS_UUID" "downloads"
+
+#####################################################
+## Phase 7: Mount restored system and chroot prep
+#####################################################
+
+phase 7 "Mount restored system"
+
+CHROOT=/mnt/restore
+
+info "Mounting restored filesystems at $CHROOT"
+mkdir -p "$CHROOT"
+mount /dev/fw16-vg/arch-root "$CHROOT"
+mount /dev/fw16-vg/arch-home "$CHROOT/home"
+mount "$BOOT_PART" "$CHROOT/boot"
+
+# Mount pseudo-filesystems for chroot
+mount --bind /dev "$CHROOT/dev"
+mount --bind /dev/pts "$CHROOT/dev/pts"
+mount -t proc proc "$CHROOT/proc"
+mount -t sysfs sys "$CHROOT/sys"
+mount -t efivarfs efivarfs "$CHROOT/sys/firmware/efi/efivars" 2>/dev/null || true
+ok
+
+#####################################################
+## Phase 8: Chroot — regenerate initramfs
+#####################################################
+
+phase 8 "Regenerate initramfs"
+
+echo "This chroots into the restored system and runs mkinitcpio to regenerate"
+echo "the initramfs. This is required because the initramfs contains the LVM"
+echo "and filesystem configuration needed to find the root volume at boot."
+
+confirm "Run mkinitcpio in chroot?"
+
+info "Running mkinitcpio -P"
+chroot "$CHROOT" mkinitcpio -P
+ok
+
+#####################################################
+## Phase 9: Chroot — restore rEFInd boot entry
+#####################################################
+
+phase 9 "Restore rEFInd EFI boot entry"
+
+echo "The new motherboard has no EFI boot entries. We need to register rEFInd."
+echo ""
+
+# Get the EFI partition's PARTUUID (already restored by sfdisk)
+BOOT_PARTUUID=$(blkid -s PARTUUID -o value "$BOOT_PART")
+echo "  EFI partition:  $BOOT_PART"
+echo "  EFI PARTUUID:   $BOOT_PARTUUID"
+printf "  rEFInd binary:  \\EFI\\refind\\refind_x64.efi\n"
+
+confirm "Create EFI boot entry for rEFInd?"
+
+info "Creating rEFInd boot entry"
+chroot "$CHROOT" efibootmgr --create \
+    --disk "$PRIMARY_DRIVE" \
+    --part 1 \
+    --label "rEFInd Boot Manager" \
+    --loader '\EFI\refind\refind_x64.efi'
+ok
+
+# Belt and braces: a copy at the removable-media path the firmware tries when
+# it has no working boot variable. Without it, a wrong or missing NVRAM entry
+# means a perfectly restored machine reports no bootable device -- the one
+# failure that looks like the backup was bad when it was not.
+info "Installing fallback bootloader at \\EFI\\BOOT\\BOOTX64.EFI"
+mkdir -p "$CHROOT/boot/EFI/BOOT"
+cp "$CHROOT/boot/EFI/refind/refind_x64.efi" "$CHROOT/boot/EFI/BOOT/BOOTX64.EFI"
+ok
+
+echo ""
+echo -e "${BOLD}Current EFI boot entries:${NC}"
+chroot "$CHROOT" efibootmgr -v
+echo ""
+
+#####################################################
+## Phase 10: Verification
+#####################################################
+
+phase 10 "Post-restore verification"
+
+echo -e "${BOLD}UUID verification:${NC}"
+echo ""
+echo "Checking that critical filesystem UUIDs match /etc/fstab..."
+echo ""
+
+# Read fstab UUIDs and compare with actual block device UUIDs
+FSTAB_OK=1
+while IFS= read -r line; do
+    # Skip comments and blank lines
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$line" ]] && continue
+
+    # Extract UUID= entries
+    if [[ "$line" =~ UUID=([^[:space:]]+) ]]; then
+        FSTAB_UUID="${BASH_REMATCH[1]}"
+        MOUNTPOINT=$(echo "$line" | awk '{print $2}')
+
+        # Check if this UUID exists in the system
+        if blkid -U "$FSTAB_UUID" >/dev/null 2>&1; then
+            ACTUAL_DEV=$(blkid -U "$FSTAB_UUID")
+            echo -e "   ${GREEN}MATCH${NC}  $MOUNTPOINT  UUID=$FSTAB_UUID  ($ACTUAL_DEV)"
+        else
+            echo -e "   ${RED}MISSING${NC}  $MOUNTPOINT  UUID=$FSTAB_UUID"
+            FSTAB_OK=0
+        fi
+    fi
+done < "$CHROOT/etc/fstab"
+
+echo ""
+if [[ $FSTAB_OK -eq 1 ]]; then
+    echo -e "${GREEN}All fstab UUIDs match. The system should boot correctly.${NC}"
+else
+    echo -e "${RED}Some fstab UUIDs are missing! Review above and fix before rebooting.${NC}"
+    echo "You can edit fstab with: nano $CHROOT/etc/fstab"
+fi
+
+#####################################################
+## Cleanup and summary
+#####################################################
+
+echo ""
+echo -e "${BOLD}============================================================${NC}"
+echo -e "${BOLD}  RESTORE COMPLETE${NC}"
+echo -e "${BOLD}============================================================${NC}"
+echo ""
+echo "Next steps:"
+echo "  1. Review the UUID verification above"
+echo "  2. If anything looks wrong:"
+echo "     - Edit fstab:      nano $CHROOT/etc/fstab"
+echo "     - Regenerate initramfs: chroot $CHROOT mkinitcpio -P"
+echo "  3. Unmount and reboot:"
+echo "     umount -R $CHROOT"
+echo "     reboot"
+echo ""
+echo "Post-boot tasks:"
+echo "  - Dropbox will re-sync to /home/brandon/Dropbox"
+echo "  - Steam library will need re-download to /home/brandon/steam"
+echo "  - Restore NAS mount in /etc/fstab or auto-mount config"
+echo "  - Verify systemd timers: systemctl list-timers"
+echo ""

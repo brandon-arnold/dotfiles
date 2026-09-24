@@ -1,0 +1,96 @@
+#!/bin/bash
+# Adjust volume/mute and emit a desktop notification with a progress bar.
+# Wired from sway bindings for XF86Audio{Raise,Lower,Mute}Volume.
+#
+# The notification fires AFTER the audio backend has acknowledged the change
+# (or after a ~200ms timeout if the change is a no-op, e.g. volume already
+# at cap), so the displayed value reflects reality rather than the pre-dispatch
+# state.
+
+set -eu
+
+SINK="@DEFAULT_SINK@"
+STEP=10
+
+# Snapshot pre-change state so we can detect when the backend has caught up.
+before_volume=$(pamixer --get-volume)
+before_muted=$(pamixer --get-mute)
+
+case "${1:-}" in
+    up)
+        pactl set-sink-mute "$SINK" 0
+        pactl set-sink-volume "$SINK" "+${STEP}%"
+        ;;
+    down)
+        pactl set-sink-mute "$SINK" 0
+        pactl set-sink-volume "$SINK" "-${STEP}%"
+        ;;
+    mute)
+        pactl set-sink-mute "$SINK" toggle
+        ;;
+    *)
+        echo "usage: $0 {up|down|mute}" >&2
+        exit 2
+        ;;
+esac
+
+# Poll until the backend reports a different value, or give up after ~200ms.
+# Bailing out is fine: if the volume was already at the cap and nothing
+# changed, we fall through with the current value, which is still the
+# correct thing to display.
+volume=$before_volume
+muted=$before_muted
+for _ in $(seq 1 20); do
+    volume=$(pamixer --get-volume)
+    muted=$(pamixer --get-mute)
+    if [ "$volume" != "$before_volume" ] || [ "$muted" != "$before_muted" ]; then
+        break
+    fi
+    sleep 0.01
+done
+
+# Cap progress bar at 100% even if pactl pushed past it.
+display_value=$(( volume > 100 ? 100 : volume ))
+
+if [ "$muted" = "true" ]; then
+    title="Volume muted"
+    icon="audio-volume-muted"
+    display_value=0
+elif [ "$volume" -ge 70 ]; then
+    title="Volume ${volume}%"
+    icon="audio-volume-high"
+elif [ "$volume" -ge 35 ]; then
+    title="Volume ${volume}%"
+    icon="audio-volume-medium"
+elif [ "$volume" -gt 0 ]; then
+    title="Volume ${volume}%"
+    icon="audio-volume-low"
+else
+    title="Volume ${volume}%"
+    icon="audio-volume-muted"
+fi
+
+# If an up/down request didn't move the needle (already at cap / floor),
+# escalate to a critical-urgency notif so mako gives it the warning border.
+# Mute toggle always changes state, so we don't second-guess it.
+notify_args=()
+if [ "$volume" = "$before_volume" ] && [ "$muted" = "$before_muted" ]; then
+    case "${1}" in
+        up)
+            notify_args+=(-u critical)
+            title="Volume already at maximum (${volume}%)"
+            ;;
+        down)
+            notify_args+=(-u critical)
+            title="Volume already at minimum (${volume}%)"
+            ;;
+    esac
+fi
+
+# x-canonical-private-synchronous makes mako replace the previous "volume"
+# notif instead of stacking, so mashing the keys doesn't pile them up.
+notify-send "${notify_args[@]}" \
+    -h "string:x-canonical-private-synchronous:volume" \
+    -h "int:value:${display_value}" \
+    -i "$icon" \
+    "$title"
