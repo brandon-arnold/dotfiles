@@ -18,6 +18,24 @@ BACKUP_ROOT_PATH="/mnt/backup/"
 DAYS_BETWEEN_BACKUPS=6
 MAX_BACKUP_AGE_DAYS=13
 
+OPENCLAW='/home/brandon/.npm-packages/bin/openclaw'
+CHANNEL='1483997048414933106'  # Discord #openclaw-fw16
+
+# Notify Discord #openclaw-fw16 on backup failure.
+# Pattern: logger first (survives Discord being down), then openclaw.
+# Never fails -- Discord outage must not hide the journal record.
+notify() {
+    local MSG="[$(hostname) system-backup] $1"
+    logger -t system-backup -p daemon.crit -- "${MSG}"
+    # systemd runs as root; openclaw needs brandon's gateway context.
+    runuser -u brandon -- env HOME=/home/brandon \
+        "${OPENCLAW}" message send --channel discord \
+        --target "channel:${CHANNEL}" --message "${MSG}" \
+        >/dev/null 2>&1 \
+        || logger -t system-backup -p daemon.err -- \
+           "Discord notify FAILED for: ${MSG}"
+}
+
 cleanup() {
     # Re-mount /boot if we unmounted it
     if [ "${UNMOUNTED_BOOT:-0}" -eq 1 ] && ! mountpoint -q /boot; then
@@ -28,7 +46,18 @@ cleanup() {
     TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-home-backup-snap' /home/brandon/scripts/snap-lvm-delete
     TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-vm2-backup-snap' /home/brandon/scripts/snap-lvm-delete
 }
-trap cleanup EXIT
+# ONE EXIT handler: cleanup ALWAYS runs (remount /boot + delete leftover LVM
+# snapshots), then notify on any non-zero exit. Capture $? FIRST -- it's the
+# true exit status, so notify fires on the `exit 1` hard-fail paths (where RES
+# is still 0) and on a signal-kill, while the skip paths (exit 0: not enough
+# time elapsed) stay silent.
+on_exit() {
+    local rc=$?
+    cleanup
+    [ "${rc}" -ne 0 ] && notify "Image backup FAILED (exit code ${rc})"
+    return "${rc}"
+}
+trap on_exit EXIT
 
 #####################################################
 ##
@@ -111,8 +140,8 @@ cp $(readlink -f "$0") "${BACKDIR}/README"
 #####################################################
 
 # includes PARTUUIDs
-sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b474d80be > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b474d80be.txt"
-sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4cb006fd > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b4cb006fd.txt"
+sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b448b4f0bf183 > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b448b4f0bf183.txt"
+sfdisk -d /dev/disk/by-id/nvme-eui.e8238fa6bf530001001b444a45813fb2 > "${BACKDIR}/sfdisk-partition-table__dev--disk--by-id--nvme-eui.e8238fa6bf530001001b444a45813fb2.txt"
 
 # includes LVM UUIDs
 cp /etc/lvm/backup/fw16-vg "${BACKDIR}/etc-lvm-backup-fw16-vg"

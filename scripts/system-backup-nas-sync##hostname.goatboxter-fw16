@@ -17,6 +17,35 @@ NAS_HOST="bkp9700@truenas.bant"
 NAS_BACKUP_PATH="/mnt/tank/backups/images/goatboxter-fw16/"
 MAX_NAS_BACKUPS=26
 
+OPENCLAW='/home/brandon/.npm-packages/bin/openclaw'
+CHANNEL='1483997048414933106'  # Discord #openclaw-fw16
+
+# Notify Discord #openclaw-fw16 on sync failure.
+# Pattern: logger first (survives Discord being down), then openclaw.
+# Never fails -- Discord outage must not hide the journal record.
+notify() {
+    local MSG="[$(hostname) system-backup-nas-sync] $1"
+    logger -t system-backup-nas-sync -p daemon.crit -- "${MSG}"
+    # systemd runs as root; openclaw needs brandon's gateway context.
+    runuser -u brandon -- env HOME=/home/brandon \
+        "${OPENCLAW}" message send --channel discord \
+        --target "channel:${CHANNEL}" --message "${MSG}" \
+        >/dev/null 2>&1 \
+        || logger -t system-backup-nas-sync -p daemon.err -- \
+           "Discord notify FAILED for: ${MSG}"
+}
+
+# EXIT handler: notify on any non-zero exit. No local cleanup is needed (this
+# script mounts/snapshots nothing). Capture $? FIRST so notify fires on the
+# `exit 1` failure paths (local path missing, rsync hard-fail); the
+# NAS-unreachable path exits 0 by design and stays silent.
+on_exit() {
+    local rc=$?
+    [ "${rc}" -ne 0 ] && notify "Backup NAS sync FAILED (exit code ${rc})"
+    return "${rc}"
+}
+trap on_exit EXIT
+
 echo "system-backup-nas-sync on $(date)"
 
 #####################################################

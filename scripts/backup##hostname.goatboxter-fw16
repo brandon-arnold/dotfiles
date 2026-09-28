@@ -20,6 +20,24 @@ SNAP_SIZE="40G"
 SNAP_MNT="/mnt/rsync-snap"
 RES=0
 
+OPENCLAW='/home/brandon/.npm-packages/bin/openclaw'
+CHANNEL='1483997048414933106'  # Discord #openclaw-fw16
+
+# Notify Discord #openclaw-fw16 on backup failure.
+# Pattern: logger first (survives Discord being down), then openclaw.
+# Never fails -- Discord outage must not hide the journal record.
+notify() {
+    local MSG="[$(hostname) personal-backup] $1"
+    logger -t personal-backup -p daemon.crit -- "${MSG}"
+    # systemd runs as root; openclaw needs brandon's gateway context.
+    runuser -u brandon -- env HOME=/home/brandon \
+        "${OPENCLAW}" message send --channel discord \
+        --target "channel:${CHANNEL}" --message "${MSG}" \
+        >/dev/null 2>&1 \
+        || logger -t personal-backup -p daemon.err -- \
+           "Discord notify FAILED for: ${MSG}"
+}
+
 cleanup() {
     echo "cleaning up local LVM snapshots: $(date)"
     mountpoint -q "${SNAP_MNT}/home" && umount "${SNAP_MNT}/home"
@@ -28,7 +46,18 @@ cleanup() {
     TRY_SILENT=1 VOLGROP='fw16-vg' SNAPVOL='arch-home-rsync-snap' /home/brandon/scripts/snap-lvm-delete
 }
 
-trap cleanup EXIT
+# ONE EXIT handler: cleanup ALWAYS runs (deletes the LVM snapshots -- leaking
+# them is what exhausts the VG), then notify on any non-zero exit. Capture $?
+# FIRST -- the snap-failure path exits 1 while RES is still 0, so a RES-based
+# check would miss it. The NAS-unreachable path exits 0 by design and is
+# intentionally NOT alerted.
+on_exit() {
+    local rc=$?
+    cleanup
+    [ "${rc}" -ne 0 ] && notify "Personal backup FAILED (exit code ${rc})"
+    return "${rc}"
+}
+trap on_exit EXIT
 
 #####################################################
 ##
