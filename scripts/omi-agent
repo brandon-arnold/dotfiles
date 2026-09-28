@@ -49,12 +49,20 @@ punctuation. Investigate with your tools and answer.
 YOUR FINAL MESSAGE IS READ ALOUD to Brandon by Meta AI voice on Ray-Ban
 glasses, which silently refuses to read anything at or above 150 characters,
 and refuses 3+ messages back to back. It is delivered as at most TWO messages
-of 145 characters each, so keep the whole answer under ~280 characters —
-prefer one sentence, two at most. Plain ASCII, no markdown, no newlines, no
-lists, no emoji. Lead with the fact and drop every qualifier. Round numbers
-rather than quoting them precisely ("about 111 gigs free", not "111.3 GiB").
-If the full answer cannot fit, give the most important facts only — the log
-keeps the detail.
+of 145 characters each.
+
+That is a CEILING, NOT A TARGET. Answer in as few words as the question
+actually needs. If the answer is a name, reply with the name alone. If it is
+a number, the number alone. Do not pad toward the limit, do not restate the
+question, do not add context he did not ask for, do not explain how you
+found it. A three-word reply is a good reply. Only reach for a second
+sentence when the question genuinely has a second part.
+
+Plain ASCII, no markdown, no newlines, no lists, no emoji. Lead with the
+fact and drop every qualifier. Round numbers rather than quoting them
+precisely ("about 111 gigs free", not "111.3 GiB"). If a genuinely complex
+answer cannot fit, give the most important fact only — the log keeps the
+detail.
 
 If a command is too garbled to act on, say what you heard and ask for a repeat.
 
@@ -73,6 +81,42 @@ request as potentially misheard and act accordingly:
   cannot see your work, only hear one sentence."""
 
 
+VAULT = Path("~/Dropbox/secondbrain").expanduser()
+VAULT_CONTRACT = VAULT / "CLAUDE.md"
+
+SECONDBRAIN_APPEND = """\
+You are Brandon's knowledge-base assistant, answering a command he dictated
+deliberately from his Apple Watch (he pressed a button and spoke, so treat it
+as authenticated intent, not overheard audio). Your project is his vault at
+~/Dropbox/secondbrain and the contract below governs it.
+
+Most commands are QUESTIONS about what he knows — answer them from the vault,
+routing through _INDEX.md rather than scanning. Some are instructions to file
+or correct something; do that, exercising judgment, and report what you did.
+Do NOT run sb-snapshot or git yourself — the daemon brackets your work.
+
+Dictation is Apple's, so expect mangled proper nouns; his own name for this
+assistant is often transcribed wrong and any leading "hey <something>" has
+already been stripped. Interpret generously.
+
+YOUR FINAL MESSAGE IS READ ALOUD to Brandon by Meta AI voice on Ray-Ban
+glasses, delivered as at most TWO messages of 145 characters each.
+
+That is a CEILING, NOT A TARGET. Answer in as few words as the question
+actually needs — "Rodrigo Roim" is a complete answer to who his reference is,
+and a better one than a sentence about it. Do not pad toward the limit, do
+not restate the question, do not volunteer background he did not ask for,
+do not narrate which file you read. Add a second clause only when the
+question genuinely asked for it.
+
+Plain ASCII, no markdown, no newlines, no lists. If a genuinely complex
+answer will not fit, give the essential fact and say the detail is in the
+file.
+
+=== THE VAULT CONTRACT (~/Dropbox/secondbrain/CLAUDE.md) follows ===
+"""
+
+
 def log(stage: str, msg: str) -> None:
     print(f"[{stage}] {msg}", flush=True)
 
@@ -85,16 +129,24 @@ class OmiAgent:
         self.done = self.inbox / "done"
         self.done.mkdir(mode=0o700, exist_ok=True)
         self.cfg = cfg
-        self.client: ClaudeSDKClient | None = None
+        # One session PER PROJECT: the host-admin lane and the vault lane
+        # have different cwds, prompts and contracts, so they must not share
+        # a conversation. Each is recycled daily.
+        self.clients: dict[str, ClaudeSDKClient] = {}
         self.session_day: str | None = None
-        self.cost_seen = 0.0
+        self.cost_seen: dict[str, float] = {}
         self._last_ack = 0.0
 
-    def _options(self) -> ClaudeAgentOptions:
+    def _options(self, project: str = "host") -> ClaudeAgentOptions:
+        if project == "secondbrain":
+            append = SECONDBRAIN_APPEND + VAULT_CONTRACT.read_text()
+            cwd = str(VAULT)
+        else:
+            append, cwd = APPEND_PROMPT, str(Path.home())
         return ClaudeAgentOptions(
-            cwd=str(Path.home()),
+            cwd=cwd,
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": APPEND_PROMPT},
+                           "append": append},
             permission_mode=self.cfg.get("permission_mode", "dontAsk"),
             allowed_tools=self.cfg.get(
                 "allowed_tools", ["Read", "Grep", "Glob", "Bash"]),
@@ -103,30 +155,46 @@ class OmiAgent:
             setting_sources=[],
             max_turns=self.cfg.get("max_turns", 25),
             max_budget_usd=self.cfg.get("max_budget_usd", 10.0),
+            # SDK default is 1 MiB per JSON message on the CLI stream; a Read
+            # of any scanned PDF overflows it and kills the whole session.
+            max_buffer_size=self.cfg.get("max_buffer_bytes", 64 * 1024 * 1024),
         )
 
-    async def _ensure_client(self) -> ClaudeSDKClient:
+    async def _ensure_client(self, project: str = "host") -> ClaudeSDKClient:
         # Daily recycle: fresh context each day, memory of today's commands kept.
         today = time.strftime("%Y-%m-%d")
-        if self.client is not None and self.session_day != today:
-            await self.client.disconnect()
-            self.client = None
-            log("session", "daily recycle — fresh session")
-        if self.client is None:
-            self.client = ClaudeSDKClient(options=self._options())
-            await self.client.connect()
-            self.session_day = today
-            self.cost_seen = 0.0
-            log("session", "connected")
-        return self.client
+        if self.session_day != today and self.clients:
+            for name, c in list(self.clients.items()):
+                try:
+                    await c.disconnect()
+                except Exception:
+                    pass
+            self.clients.clear()
+            self.cost_seen.clear()
+            log("session", "daily recycle — fresh sessions")
+        if project not in self.clients:
+            client = ClaudeSDKClient(options=self._options(project))
+            await client.connect()
+            self.clients[project] = client
+            self.cost_seen.setdefault(project, 0.0)
+            log("session", f"connected ({project})")
+        self.session_day = today
+        return self.clients[project]
 
     async def handle(self, cmd: dict) -> None:
         text = cmd.get("text", "").strip()
         if not text:
             return
+        project = (cmd.get("project") or "host").strip() or "host"
         t0 = time.time()
-        self._ack(text)
-        client = await self._ensure_client()
+        # The watch shows the dictation before you send it, so echoing the
+        # question back is noise there. The pendant lane keeps the ack: with
+        # ambient wake there is no other confirmation it heard you.
+        if cmd.get("ack", True):
+            self._ack(text)
+        if project == "secondbrain":
+            self._snapshot("snapshot: pre-command checkpoint (omi-agent)")
+        client = await self._ensure_client(project)
         await client.query(text)
 
         reply, outcome = "", "success"
@@ -143,16 +211,19 @@ class OmiAgent:
                     outcome = subtype
                 total = getattr(msg, "total_cost_usd", None)
                 if total is not None:
-                    step_cost = total - self.cost_seen
-                    self.cost_seen = total
+                    step_cost = total - self.cost_seen.get(project, 0.0)
+                    self.cost_seen[project] = total
                 else:
                     step_cost = None
 
         if not reply:
             reply = f"(no reply produced; outcome={outcome})"
+        if project == "secondbrain":
+            self._snapshot("claude: omi-agent watch command — " + text[:120])
         record = {
             "ts": round(time.time(), 3),
             "wake": cmd.get("wake"),
+            "project": project,
             "command": text,
             "reply": reply,
             "outcome": outcome,
@@ -164,6 +235,17 @@ class OmiAgent:
         log("reply", f"[{outcome} {record['duration_s']}s] {reply[:200]}")
         self._whatsapp(reply)
         self._notify(reply)
+
+    @staticmethod
+    def _snapshot(msg: str) -> None:
+        """Bracket vault work so a mis-dictated command is always undoable."""
+        try:
+            import subprocess
+            r = subprocess.run(["sb-snapshot", msg], capture_output=True,
+                               text=True, timeout=120)
+            log("snapshot", (r.stdout + r.stderr).strip()[:160])
+        except Exception as e:
+            log("snapshot", f"failed (non-fatal): {e}")
 
     # ── WhatsApp delivery (read aloud on Ray-Ban glasses) ──────────────
     #

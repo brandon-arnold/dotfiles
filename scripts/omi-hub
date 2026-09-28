@@ -17,7 +17,9 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.request
 from collections import OrderedDict
+from datetime import datetime
 
 CONFIG_PATH = os.path.expanduser("~/.config/omi-hub/config.toml")
 
@@ -325,6 +327,472 @@ class Dispatcher:
             log("send", f"delivered via {sink_name}")
 
 
+class CommandRoute:
+    """Deliberate commands POSTed from the Apple Watch (Shortcuts) to the
+    Lambda's /command path.
+
+    This lane exists because the pendant's live path is unreliable: iOS
+    suspends its BLE connection in the background (BasedHardware/omi#11307),
+    and on 2026-08-17 the realtime stream carried only ~21% of the day. A
+    button press on the watch needs none of it.
+
+    No wake word: pressing the button IS the intent, so the whole matcher —
+    phrases, fuzzy tokens, speech gaps, the 30s cap — is bypassed. The
+    pendant path is untouched and keeps its wake words. A leading
+    "hey <name>" is stripped as noise, since Apple's dictation mangles the
+    name anyway ("Banto" -> "Batu") and it carries no meaning here.
+
+    The URL path selects the project (/command -> secondbrain,
+    /command/<project> -> that project), so routing can never be misheard."""
+
+    _LEAD = re.compile(r"^(?:hey|hi|hello|ok|okay)\s+(\S+?)[,.!]?\s+", re.I)
+
+    def __init__(self, cfg):
+        c = cfg.get("command", {})
+        self.enabled = c.get("enabled", True)
+        self.default_project = c.get("default_project", "secondbrain")
+        self.allowed = set(c.get("projects", ["secondbrain", "host"]))
+        self.inbox = os.path.expanduser(
+            (cfg.get("sinks", {}).get("agent", {}) or {}).get(
+                "inbox", "~/omi/agent-inbox"))
+        self.dedup_window = c.get("dedup_seconds", 90)
+        self.names = [normalize(n) for n in c.get(
+            "strip_names", ["banto", "bantu", "batu", "bato", "bandu"])]
+        self.journal_inbox = os.path.expanduser(
+            (cfg.get("journal", {}) or {}).get(
+                "inbox", "~/omi/journal-inbox"))
+        os.makedirs(self.journal_inbox, mode=0o700, exist_ok=True)
+        os.makedirs(self.inbox, mode=0o700, exist_ok=True)
+        self.recent = OrderedDict()
+
+    def _strip_lead(self, text):
+        m = self._LEAD.match(text)
+        if not m:
+            return text
+        tok = normalize(m.group(1))
+        if any(edit_distance(tok, n, 2) <= 2 for n in self.names):
+            return text[m.end():].lstrip()
+        return text
+
+    def _project(self, path):
+        rest = path[len("/command"):].strip("/")
+        proj = rest.split("/")[0] if rest else ""
+        if proj and proj in self.allowed:
+            return proj
+        return self.default_project
+
+    def handle_journal(self, env, payload, now):
+        """A journal entry dictated from the watch, handed to omi-yeoman.
+
+        Same treatment a Captain's Log gets, minus every fragile part: no cue
+        phrase that can vanish at a conversation seam, no ambient speakers or
+        television to filter out, and no waiting on Omi to finalize (or to
+        deliver a webhook it may sit on for hours). The text IS the entry."""
+        if not self.enabled or not isinstance(payload, dict):
+            return False
+        text = self._strip_lead((payload.get("text") or "").strip())
+        if not text:
+            log("journal", "empty dictation, dropped")
+            return False
+        key = normalize(text)
+        last = self.recent.get(key)
+        if last is not None and now - last < self.dedup_window:
+            log("journal", f"duplicate dictation within {now - last:.0f}s, ignored")
+            return False
+        self.recent[key] = now
+        cid = "watch-%d" % time.time_ns()
+        iso = datetime.now().astimezone().isoformat()
+        conv = {
+            "id": cid,
+            "source": "watch-shortcut",
+            "language": "en",
+            "created_at": iso, "started_at": iso, "finished_at": iso,
+            "structured": {"title": "", "overview": "", "action_items": []},
+            "transcript_segments": [{
+                "text": text, "is_user": True, "speaker": "SPEAKER_0",
+                "speaker_name": "Brandon", "start": 0.0, "end": 0.0}],
+        }
+        job = {"conversation_id": cid, "refetch": False,
+               "received_at": env.get("received_at"), "conversation": conv}
+        path = os.path.join(self.journal_inbox, f"job-{cid}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(job, f)
+        os.replace(tmp, path)
+        log("journal", f"watch entry enqueued ({len(text)} chars) {cid}")
+        return True
+
+    def handle(self, env, payload, now):
+        """Returns True when a command was enqueued."""
+        if not self.enabled or not isinstance(payload, dict):
+            return False
+        text = (payload.get("text") or payload.get("command") or "").strip()
+        if not text:
+            log("command", "empty text, dropped")
+            return False
+        text = self._strip_lead(text)
+        if not text:
+            log("command", "nothing left after stripping the address, dropped")
+            return False
+        # The Action button on Ultra 2 can fire a shortcut twice
+        # (developer forums #739182), so identical text in quick succession
+        # is one command, not two.
+        key = normalize(text)
+        last = self.recent.get(key)
+        if last is not None and now - last < self.dedup_window:
+            log("command", f"duplicate within {now - last:.0f}s, ignored")
+            return False
+        self.recent[key] = now
+        while len(self.recent) > 256:
+            self.recent.popitem(last=False)
+        project = self._project(env.get("path") or "/command")
+        cmd = {"wake": "watch", "project": project, "text": text,
+               "source": "watch-shortcut", "ack": False,
+               "received_at": env.get("received_at")}
+        path = os.path.join(self.inbox, f"cmd-{time.time_ns()}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cmd, f)
+        os.replace(tmp, path)
+        log("command", f"enqueued [{project}] {text[:90]!r}")
+        return True
+
+
+class JournalDetector:
+    """Watch finalized-conversation (/memory) webhooks for the Captain's Log
+    cue and enqueue jobs for omi-yeoman (~/scripts/omi-yeoman).
+
+    The cue is scanned across the WHOLE transcript, not just the opening
+    tokens: a no-button entry glues onto whatever ambient conversation was
+    already open (observed 2026-08-15), so position cannot be trusted.
+    Idempotent via a conversation-id ledger — SQS redeliveries and Omi
+    re-summarizations of the same conversation never enqueue twice.
+
+    TWO observed ways a real entry reaches us WITHOUT the cue in the
+    webhook payload; both are covered here, because neither is the
+    speaker's fault and both looked like silent no-ops:
+
+    1. PREMATURE STUB (2026-08-17). Omi delivers /memory before it has
+       finished transcribing: the payload arrives `discarded=true` with
+       zero segments and started==finished, and the very same
+       conversation carries the cue in the Dev API a minute later. So a
+       stub is never dropped — it is DEFERRED and re-fetched by id.
+    2. SEAM LOSS (2026-08-17). A cue spoken as the first sound of a
+       brand-new conversation can be missing from the finalized
+       transcript even though the realtime feed carried it. So live cue
+       SIGHTINGS are recorded, and a conversation whose time window
+       contains one is treated as an entry regardless of its transcript.
+    """
+
+    _ID_RE = re.compile(r'"id"\s*:\s*"([0-9a-f-]{36})"')
+
+    def __init__(self, cfg):
+        j = cfg.get("journal", {})
+        self.enabled = j.get("enabled", True)
+        self.inbox = os.path.expanduser(j.get("inbox", "~/omi/journal-inbox"))
+        self.ledger_path = os.path.expanduser(
+            j.get("ledger", "~/omi/journal-ledger.json"))
+        self.pending_path = os.path.expanduser(
+            j.get("pending", "~/omi/journal-pending.json"))
+        self.api_key_file = os.path.expanduser(
+            j.get("api_key_file", "~/.bna-private/omi-dev-key"))
+        self.recheck_every = j.get("recheck_seconds", 60)
+        self.recheck_tries = j.get("recheck_attempts", 6)
+        # Reconciliation sweep — the net under every webhook failure mode.
+        self.sweep_every = j.get("sweep_seconds", 300)
+        self.sweep_lookback = j.get("sweep_lookback_seconds", 14400)
+        self.sweep_limit = j.get("sweep_limit", 25)
+        self.last_sweep = 0.0
+        # How far outside a conversation's own window a live sighting may
+        # sit and still belong to it: realtime delivery lags by a second or
+        # two, and the finalized window can start after the first word.
+        self.sight_before = j.get("sighting_lead_seconds", 90)
+        self.sight_after = j.get("sighting_tail_seconds", 180)
+        self.sightings = []
+        self.phrases = [normalize(p) for p in j.get(
+            "phrases", ["captain's log", "captains log", "captain slog",
+                        "captain's blog", "captain log"])]
+        # Fuzzy pair: a token near "captain(s)" followed within 2 words by a
+        # token near "log" — catches renderings no phrase list anticipates.
+        self.fuzzy_first = [normalize(t) for t in j.get(
+            "fuzzy_first", ["captain", "captains"])]
+        self.fuzzy_second = [normalize(t) for t in j.get(
+            "fuzzy_second", ["log", "logs", "blog"])]
+        self.fuzzy_distance = j.get("fuzzy_distance", 1)
+        os.makedirs(self.inbox, mode=0o700, exist_ok=True)
+        try:
+            with open(self.ledger_path) as f:
+                self.seen = OrderedDict((k, None) for k in json.load(f))
+        except Exception:
+            self.seen = OrderedDict()
+        try:
+            with open(self.pending_path) as f:
+                self.pending = json.load(f)
+        except Exception:
+            self.pending = {}
+
+    def _save_pending(self):
+        tmp = self.pending_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.pending, f)
+        os.replace(tmp, self.pending_path)
+
+    def _already_filed(self, cid):
+        """A job file for this conversation in inbox/, done/ or failed/ is
+        authoritative proof it was already handed to omi-yeoman — including
+        jobs staged by hand, which never touch the ledger. Checked alongside
+        the ledger so a lost or edited ledger cannot cause a re-ingest."""
+        name = f"job-{cid}.json"
+        for d in (self.inbox, os.path.join(self.inbox, "done"),
+                  os.path.join(self.inbox, "failed")):
+            if os.path.exists(os.path.join(d, name)):
+                return True
+        return False
+
+    def _remember(self, cid):
+        self.seen[cid] = None
+        while len(self.seen) > 4096:
+            self.seen.popitem(last=False)
+        tmp = self.ledger_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(list(self.seen), f)
+        os.replace(tmp, self.ledger_path)
+
+    def _has_cue(self, ntext):
+        for p in self.phrases:
+            if p and p in ntext:
+                return True
+        words = ntext.split()
+        d = self.fuzzy_distance
+        for i, w in enumerate(words):
+            if any(edit_distance(w, t, d) <= d for t in self.fuzzy_first):
+                for w2 in words[i + 1:i + 3]:
+                    if any(edit_distance(w2, t, 1) <= 1
+                           for t in self.fuzzy_second):
+                        return True
+        return False
+
+    # ── live cue sightings (covers seam loss) ──────────────────────────
+
+    def note_realtime(self, segments, now):
+        """Record that the cue was HEARD live, with wall-clock time. The
+        finalized transcript is re-derived from audio and can drop a cue
+        spoken at the very start of a conversation; the live feed is the
+        only witness that it was said."""
+        if not self.enabled:
+            return
+        text = normalize(" ".join(s.get("text", "") for s in segments))
+        if text and self._has_cue(text):
+            self.sightings.append(now)
+            log("journal", "live cue sighting recorded")
+        cutoff = now - 3600
+        self.sightings = [t for t in self.sightings if t >= cutoff][-50:]
+
+    @staticmethod
+    def _epoch(iso):
+        try:
+            return datetime.fromisoformat(iso).timestamp() if iso else None
+        except Exception:
+            return None
+
+    def _sighting_matches(self, payload):
+        if not isinstance(payload, dict) or not self.sightings:
+            return False
+        start = (self._epoch(payload.get("started_at"))
+                 or self._epoch(payload.get("created_at")))
+        if start is None:
+            return False
+        finish = self._epoch(payload.get("finished_at")) or start
+        lo, hi = start - self.sight_before, finish + self.sight_after
+        return any(lo <= t <= hi for t in self.sightings)
+
+    # ── enqueue / defer / re-check ─────────────────────────────────────
+
+    def _enqueue(self, cid, payload, why, received_at=None):
+        job = {"conversation_id": cid,
+               "refetch": payload is None,
+               "received_at": received_at,
+               "conversation": payload}
+        path = os.path.join(self.inbox, f"job-{cid}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(job, f)
+        os.replace(tmp, path)
+        if self.pending.pop(cid, None) is not None:
+            self._save_pending()
+        self._remember(cid)
+        log("journal", f"enqueued {cid} ({why})")
+
+    def _defer(self, cid, now):
+        self.pending[cid] = {"first": now, "last": now, "tries": 0}
+        self._save_pending()
+        log("journal", f"empty stub {cid} deferred for re-check")
+
+    def _api(self, path, timeout=20):
+        with open(self.api_key_file) as f:
+            key = f.read().strip()
+        req = urllib.request.Request(
+            "https://api.omi.me/v1/dev" + path,
+            headers={"Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+
+    def _api_conversation(self, cid):
+        return self._api(f"/user/conversations/{cid}?include_transcript=true")
+
+    def _api_recent(self):
+        return self._api(f"/user/conversations?limit={self.sweep_limit}"
+                         "&include_transcript=true", timeout=30)
+
+    @staticmethod
+    def _meta_text(conv):
+        st = conv.get("structured") or {}
+        return normalize(f"{st.get('title', '')} {st.get('overview', '')}")
+
+    def sweep(self, now):
+        """Reconciliation sweep — the net under EVERY webhook failure mode.
+
+        The /memory path has now failed four distinct ways: an empty stub that
+        fills in later (sometimes past any sane re-check window, 2026-08-17
+        cbfefe02), a payload whose transcript lost the cue at the conversation
+        seam, a delivery that never arrived, and a hub that was down when it
+        did. Rather than chase each, list recent conversations from the API on
+        a timer and enqueue anything carrying the cue that we have not already
+        seen. The ledger keeps it idempotent; the lookback keeps it from
+        re-ingesting history."""
+        if not self.enabled or now - self.last_sweep < self.sweep_every:
+            return
+        self.last_sweep = now
+        try:
+            convs = self._api_recent()
+        except Exception as e:
+            log("journal", f"sweep failed: {e}")
+            return
+        if not isinstance(convs, list):
+            return
+        for c in convs:
+            if not isinstance(c, dict):
+                continue
+            cid = c.get("id")
+            if (not cid or cid in self.seen or cid in self.pending
+                    or c.get("source") == "external_integration"
+                    or self._already_filed(cid)):
+                continue
+            created = (self._epoch(c.get("created_at"))
+                       or self._epoch(c.get("started_at")))
+            if created and now - created > self.sweep_lookback:
+                continue
+            segs = c.get("transcript_segments") or []
+            ntext = normalize(" ".join(s.get("text", "") for s in segs))
+            if "omi yeoman reflected entry" in ntext:
+                self._remember(cid)
+                continue
+            if (self._has_cue(ntext) or self._has_cue(self._meta_text(c))
+                    or self._sighting_matches(c)):
+                self._enqueue(cid, c, "sweep")
+            elif segs:
+                # Complete and cue-free: settle it so the sweep stops
+                # re-reading it every cycle.
+                self._remember(cid)
+
+    def poll(self, now):
+        """Re-check deferred stubs against the Dev API. Omi fills a
+        conversation in AFTER the webhook fires, so a payload that was empty
+        at delivery can carry the cue a minute later (observed 2026-08-17)."""
+        if not self.enabled or not self.pending:
+            return
+        dirty = False
+        for cid, st in list(self.pending.items()):
+            if now - st.get("last", 0) < self.recheck_every:
+                continue
+            dirty = True
+            st["last"] = now
+            st["tries"] = st.get("tries", 0) + 1
+            try:
+                conv = self._api_conversation(cid)
+            except Exception as e:
+                log("journal", f"re-check {cid} failed: {e}")
+                conv = None
+            if isinstance(conv, dict):
+                segs = conv.get("transcript_segments") or []
+                ntext = normalize(" ".join(s.get("text", "") for s in segs))
+                if "omi yeoman reflected entry" in ntext:
+                    self.pending.pop(cid, None)
+                    self._remember(cid)
+                    continue
+                if (self._has_cue(ntext) or self._has_cue(self._meta_text(conv))
+                        or self._sighting_matches(conv)):
+                    self._enqueue(cid, conv, f"re-check hit, try {st['tries']}")
+                    continue
+                if segs and st["tries"] >= 2:
+                    self.pending.pop(cid, None)
+                    self._remember(cid)
+                    log("journal", f"{cid} filled in without the cue — dropped")
+                    continue
+            if st["tries"] >= self.recheck_tries:
+                self.pending.pop(cid, None)
+                # Deliberately NOT remembered: a stub can fill in long after
+                # any sane re-check window (2026-08-17 cbfefe02 took >6 min),
+                # and remembering here would hide it from the sweep — the one
+                # mechanism that could still rescue it. It ages out of the
+                # sweep's lookback instead.
+                log("journal", f"{cid} gave up after {st['tries']} re-checks "
+                               "— the sweep is the remaining net")
+        if dirty:
+            self._save_pending()
+
+    def consider(self, env, payload):
+        """Called for every /memory envelope. payload is None when the Lambda
+        truncated an over-long body (>250KB) into invalid JSON — then the id
+        is salvaged by regex and omi-yeoman refetches from the API."""
+        if not self.enabled:
+            return
+        now = time.time()
+        truncated = bool(env.get("truncated"))
+        cid, ntext, segs = None, "", []
+        if isinstance(payload, dict):
+            # Only pendant/audio conversations are journal candidates.
+            # External writes (source=external_integration) include
+            # omi-yeoman's own reflected entries — never ingest those.
+            if payload.get("source") == "external_integration":
+                return
+            cid = payload.get("id")
+            segs = payload.get("transcript_segments") or []
+            ntext = normalize(" ".join(s.get("text", "") for s in segs))
+            # Loop guard: omi-yeoman posts its reflected entries back INTO
+            # Omi, and external writes run Omi's full pipeline including
+            # this very webhook. Without this check the pipeline would
+            # ingest its own reflection forever.
+            if "omi yeoman reflected entry" in ntext:
+                if cid:
+                    self._remember(cid)
+                return
+        elif truncated:
+            m = self._ID_RE.search(env.get("body") or "")
+            cid = m.group(1) if m else None
+        if (not cid or cid in self.seen or cid in self.pending
+                or self._already_filed(cid)):
+            return
+        if payload is None:            # oversized body — yeoman refetches
+            self._enqueue(cid, None, "truncated payload", env.get("received_at"))
+            return
+        if self._has_cue(ntext):
+            self._enqueue(cid, payload, "cue in transcript",
+                          env.get("received_at"))
+            return
+        if self._sighting_matches(payload):
+            self._enqueue(cid, payload, "live sighting inside window",
+                          env.get("received_at"))
+            return
+        if not segs:
+            # Empty payload: Omi hasn't transcribed it yet. NEVER drop these
+            # — `discarded=true` on a zero-segment payload means "not
+            # processed yet", not "not worth keeping".
+            self._defer(cid, now)
+            return
+        self._remember(cid)            # complete transcript, no cue: not ours
+
+
 def selftest():
     cfg = {"gap_seconds": 2.0, "empty_gap_seconds": 10.0,
            "max_capture_seconds": 30, "require_is_user": True,
@@ -381,6 +849,213 @@ def selftest():
     # intent regex
     d = Dispatcher({"sinks": {}})
     assert d.intents[0][0].search("how's my backup going")
+
+    # ── JournalDetector ──
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        jcfg = {"journal": {"inbox": td + "/inbox", "ledger": td + "/ledger.json"}}
+        jd = JournalDetector(jcfg)
+
+        def _conv(cid, text, discarded=False):
+            return {"id": cid, "discarded": discarded,
+                    "transcript_segments": [{"text": text}]}
+
+        def _jobs():
+            return sorted(os.listdir(td + "/inbox"))
+
+        uid = "0badc0de-0000-4000-8000-%012d"
+        # exact cue, anywhere in the transcript
+        jd.consider({}, _conv(uid % 1, "blah blah. Captain's log. news here."))
+        assert len(_jobs()) == 1, _jobs()
+        # dedup: same conversation redelivered → no second job
+        jd.consider({}, _conv(uid % 1, "Captain's log again"))
+        assert len(_jobs()) == 1
+        # fuzzy pair: ASR mangling ("Captain slog" arrives split oddly)
+        jd.consider({}, _conv(uid % 2, "and then kaptain lag more words"))
+        assert len(_jobs()) == 2, _jobs()
+        # ordinary speech with log-adjacent words must NOT trip
+        jd.consider({}, _conv(uid % 3, "their friend logs in some other time"))
+        jd.consider({}, _conv(uid % 4, "i should keep a log of this"))
+        assert len(_jobs()) == 2, _jobs()
+        # `discarded` is NOT a veto when the transcript carries the cue:
+        # Omi's discard heuristic knows nothing about Captain's Log, and a
+        # short entry is exactly what it likes to throw away.
+        jd.consider({}, _conv(uid % 5, "Captain's log, short one", discarded=True))
+        assert len(_jobs()) == 3, _jobs()
+        # loop guard: yeoman's own reflected entries must never re-trigger
+        jd.consider({}, _conv(uid % 7,
+                              "omi-yeoman reflected entry. Captain's log. text"))
+        assert len(_jobs()) == 3, _jobs()
+        # truncated envelope: id salvaged, refetch job enqueued
+        jd.consider({"truncated": True,
+                     "body": '{"id": "%s", "transcript' % (uid % 6)}, None)
+        assert len(_jobs()) == 4, _jobs()
+        with open(td + "/inbox/job-" + uid % 6 + ".json") as f:
+            assert json.load(f)["refetch"] is True
+        # ledger survives a restart
+        jd2 = JournalDetector(jcfg)
+        jd2.consider({}, _conv(uid % 1, "Captain's log once more"))
+        assert len(_jobs()) == 4
+
+        # ── failure mode 1: premature empty stub (2026-08-17) ──
+        # Omi delivers /memory before transcribing: discarded + 0 segments.
+        # It must be DEFERRED, never dropped, then re-checked via the API.
+        stub = {"id": uid % 10, "discarded": True, "transcript_segments": [],
+                "started_at": "2026-08-17T17:24:22.713936+00:00",
+                "finished_at": "2026-08-17T17:24:22.713936+00:00"}
+        jd.consider({}, stub)
+        assert len(_jobs()) == 4, "stub must not enqueue yet"
+        assert uid % 10 in jd.pending, "stub must be deferred"
+        # ...and when the conversation fills in with the cue, it enqueues.
+        jd.recheck_every = 0
+        jd._api_conversation = lambda cid: {
+            "id": cid, "transcript_segments": [
+                {"text": "And captain's log captain's log. i got a message "
+                         "back on linkedin from rodrigo"}]}
+        jd.poll(time.time())
+        assert len(_jobs()) == 5, _jobs()
+        assert uid % 10 not in jd.pending
+        # a stub that fills in WITHOUT the cue is dropped after 2 tries
+        jd.consider({}, {"id": uid % 11, "discarded": True,
+                         "transcript_segments": []})
+        jd._api_conversation = lambda cid: {
+            "id": cid, "transcript_segments": [{"text": "ordinary chatter"}]}
+        jd.poll(time.time())
+        jd.poll(time.time())
+        assert len(_jobs()) == 5 and uid % 11 not in jd.pending
+
+        # ── failure mode 2: seam loss (2026-08-17) ──
+        # Cue heard live, but missing from the finalized transcript because
+        # it was the first sound of a brand-new conversation.
+        jd3 = JournalDetector(jcfg)
+        t0 = time.time()
+        jd3.note_realtime([{"text": "Captain's log"}], t0)
+        assert jd3.sightings, "live cue must be recorded"
+        from datetime import timezone as _tz
+        iso = lambda t: datetime.fromtimestamp(t, _tz.utc).isoformat()
+        jd3.consider({}, {"id": uid % 12,
+                          "transcript_segments": [
+                              {"text": "I just got an email from Trey"}],
+                          "started_at": iso(t0 - 2),
+                          "finished_at": iso(t0 + 24)})
+        assert len(_jobs()) == 6, "sighting inside the window must enqueue"
+        # a cue-free conversation far from any sighting stays untouched
+        jd3.consider({}, {"id": uid % 13,
+                          "transcript_segments": [{"text": "dinner plans"}],
+                          "started_at": iso(t0 + 7200),
+                          "finished_at": iso(t0 + 7300)})
+        assert len(_jobs()) == 6 and uid % 13 not in jd3.pending
+
+    # ── CommandRoute (Apple Watch shortcut lane) ──
+    with tempfile.TemporaryDirectory() as td2:
+        ccfg = {"sinks": {"agent": {"inbox": td2}},
+                "command": {"dedup_seconds": 90}}
+        cr = CommandRoute(ccfg)
+        cmds = lambda: sorted(os.listdir(td2))
+        env = lambda p="/command": {"path": p, "received_at": 1.0}
+
+        # the address is stripped, however Apple mangled it
+        for heard in ("Hey Banto, what is my disk usage?",
+                      "Hey Batu, what is my disk usage?",
+                      "hey bandu what is my disk usage?"):
+            cr.recent.clear()
+            assert cr.handle(env(), {"text": heard}, 100.0)
+            with open(os.path.join(td2, cmds()[-1])) as f:
+                got = json.load(f)
+            assert got["text"].lower().startswith("what is my disk"), got
+            assert got["project"] == "secondbrain", got
+        # a real command that merely starts with "hey" is NOT eaten
+        cr.recent.clear()
+        cr.handle(env(), {"text": "Hey Rodrigo emailed me back, file that"}, 200.0)
+        with open(os.path.join(td2, cmds()[-1])) as f:
+            assert "Rodrigo" in json.load(f)["text"]
+        # Ultra-2 double-fire: identical text in quick succession is one command
+        n = len(cmds())
+        cr.recent.clear()
+        assert cr.handle(env(), {"text": "check the backups"}, 300.0)
+        assert not cr.handle(env(), {"text": "check the backups"}, 300.4)
+        assert len(cmds()) == n + 1
+        # ...but the same command later is legitimately new
+        assert cr.handle(env(), {"text": "check the backups"}, 500.0)
+        # the URL path selects the project; unknown paths fall back
+        cr.recent.clear()
+        cr.handle(env("/command/host"), {"text": "uptime"}, 600.0)
+        with open(os.path.join(td2, cmds()[-1])) as f:
+            assert json.load(f)["project"] == "host"
+        cr.recent.clear()
+        cr.handle(env("/command/nonsense"), {"text": "uptime"}, 700.0)
+        with open(os.path.join(td2, cmds()[-1])) as f:
+            assert json.load(f)["project"] == "secondbrain"
+        # empty dictation never wakes an agent
+        assert not cr.handle(env(), {"text": "   "}, 800.0)
+
+        # ── /journal: dictated entries go to omi-yeoman, not the agent ──
+        with tempfile.TemporaryDirectory() as jd_dir:
+            cr2 = CommandRoute({"sinks": {"agent": {"inbox": td2}},
+                                "journal": {"inbox": jd_dir},
+                                "command": {"dedup_seconds": 90}})
+            n_cmd = len(cmds())
+            assert cr2.handle_journal(
+                {"path": "/journal", "received_at": 1.0},
+                {"text": "Hey Batu, captains log. Today the watch lane shipped."},
+                900.0)
+            jobs = sorted(os.listdir(jd_dir))
+            assert len(jobs) == 1, jobs
+            assert len(cmds()) == n_cmd, "a journal entry must NOT reach the agent inbox"
+            with open(os.path.join(jd_dir, jobs[0])) as f:
+                job = json.load(f)
+            conv = job["conversation"]
+            assert job["refetch"] is False and conv["source"] == "watch-shortcut"
+            assert conv["transcript_segments"][0]["text"].startswith("captains log")
+            assert conv["started_at"] and conv["finished_at"]
+            # dedupe applies here too (Ultra-2 double fire)
+            assert not cr2.handle_journal(
+                {"path": "/journal"},
+                {"text": "Hey Batu, captains log. Today the watch lane shipped."},
+                900.5)
+            assert len(os.listdir(jd_dir)) == 1
+            assert not cr2.handle_journal({"path": "/journal"}, {"text": ""}, 950.0)
+
+    with tempfile.TemporaryDirectory() as td3:
+        jcfg = {"journal": {"inbox": td3 + "/inbox", "ledger": td3 + "/ledger.json",
+                            "pending": td3 + "/pending.json"}}
+        def _jobs():
+            return sorted(os.listdir(td3 + "/inbox"))
+        uid = "0badc0de-0000-4000-8000-%012d"
+        iso = lambda t: datetime.fromtimestamp(t, __import__("datetime").timezone.utc).isoformat()
+        # ── the sweep: net under every webhook failure mode ──
+        # A stub the fast path gave up on (2026-08-17 cbfefe02 filled in more
+        # than 6 minutes after its webhook) must still be caught.
+        jd4 = JournalDetector(jcfg)
+        now4 = time.time()
+        jd4._api_recent = lambda: [
+            {"id": uid % 20, "created_at": iso(now4 - 300),
+             "transcript_segments": [
+                 {"text": "Captain's log, captain's log. i responded to trey"}]},
+            {"id": uid % 21, "created_at": iso(now4 - 300),
+             "transcript_segments": [{"text": "unrelated chatter"}]},
+            {"id": uid % 22, "created_at": iso(now4 - 300),
+             "structured": {"title": "Captain's Log about the trip"},
+             "transcript_segments": []},
+            {"id": uid % 23, "created_at": iso(now4 - 999999),
+             "transcript_segments": [{"text": "ancient captain's log"}]},
+            {"id": uid % 24, "created_at": iso(now4 - 300),
+             "source": "external_integration",
+             "transcript_segments": [{"text": "captain's log reflected"}]},
+        ]
+        before = len(_jobs())
+        jd4.sweep(now4)
+        after = sorted(set(_jobs()) - set())
+        assert len(after) == before + 2, after       # transcript hit + title hit
+        assert any(uid % 20 in n for n in after) and any(uid % 22 in n for n in after)
+        assert not any(uid % 23 in n for n in after), "lookback must exclude history"
+        assert not any(uid % 24 in n for n in after), "own reflections excluded"
+        # rate limited: a second immediate sweep does nothing
+        jd4.sweep(now4 + 1)
+        assert len(_jobs()) == before + 2
+        # and a cue-free conversation is settled, not re-read forever
+        assert uid % 21 in jd4.seen
+
     print("selftest OK")
 
 
@@ -399,10 +1074,24 @@ def main():
     matcher = Matcher(cfg.get("matcher", {}) | {"wake": cfg.get("wake", {})})
     dispatcher = Dispatcher(cfg)
     screenpipe = Screenpipe(cfg.get("screenpipe", {}))
+    journal = JournalDetector(cfg)
+    commands = CommandRoute(cfg)
     dedup = Dedup()
     log("start", f"omi-hub consuming {queue_url}")
 
+    # Self-reload: this unit is root-owned, so picking up an edit would
+    # otherwise need sudo. Re-exec in place when the source file changes.
+    src = os.path.abspath(__file__)
+    src_mtime = os.path.getmtime(src)
+
     while True:
+        try:
+            if os.path.getmtime(src) != src_mtime:
+                log("reload", "source changed — re-exec")
+                sys.stdout.flush()
+                os.execv(sys.executable, [sys.executable, src] + sys.argv[1:])
+        except OSError:
+            pass
         # Short poll cycles while a capture is pending so the segment-gap
         # timeout fires promptly; lazy 20s long-poll otherwise.
         wait = 2 if matcher.has_pending() else 20
@@ -430,14 +1119,35 @@ def main():
             if env.get("path", "").startswith("/transcript") and isinstance(payload, dict):
                 segments = payload.get("segments", [])
                 screenpipe.post_segments(segments)
+                journal.note_realtime(segments, now)
                 sid = env.get("session_id") or "default"
                 for cap in matcher.feed(sid, segments, now):
                     dispatcher.dispatch(cap)
+            elif env.get("path", "").startswith("/journal"):
+                try:
+                    commands.handle_journal(env, payload, now)
+                except Exception as e:
+                    log("journal", f"watch route error (skipped): {e!r}")
+            elif env.get("path", "").startswith("/command"):
+                try:
+                    commands.handle(env, payload, now)
+                except Exception as e:
+                    log("command", f"route error (skipped): {e!r}")
+            elif env.get("path", "").startswith("/memory"):
+                try:
+                    journal.consider(env, payload)
+                except Exception as e:
+                    log("journal", f"detector error (skipped): {e!r}")
         if entries:
             sqs.delete_message_batch(QueueUrl=queue_url, Entries=entries)
             log("intake", f"{len(entries)} message(s) processed")
         for cap in matcher.tick(time.time()):
             dispatcher.dispatch(cap)
+        try:
+            journal.poll(time.time())
+            journal.sweep(time.time())
+        except Exception as e:
+            log("journal", f"poll/sweep error (skipped): {e!r}")
 
 
 if __name__ == "__main__":
