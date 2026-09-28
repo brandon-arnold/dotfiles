@@ -30,7 +30,18 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
 # export GBM_BACKEND=nvidia-drm
 # export __GLX_VENDOR_LIBRARY_NAME=nvidia
 # export WLR_NO_HARDWARE_CURSORS=1
-export WLR_DRM_DEVICES=/dev/dri/card2
+# Point Sway at the AMD iGPU. Select by DRIVER, not by index or PCI path: DRM card
+# numbers are assigned at probe time and PCI bus numbers shift when the Expansion Bay
+# graphics module is absent, so a hard-coded /dev/dri/cardN or by-path breaks on a
+# machine without the dGPU (Sway then exits to a console).
+for _c in /dev/dri/card*(N); do   # (N) = null_glob: no DRM devices is not an error
+  _drv=/sys/class/drm/${_c##*/}/device/driver
+  if [ -e "$_drv" ] && [ "$(basename "$(readlink -f "$_drv")")" = amdgpu ]; then
+    export WLR_DRM_DEVICES="$_c"
+    break
+  fi
+done
+unset _c _drv
 
 # Set NPM_PACKAGES environment variable
 NPM_PACKAGES="${HOME}/.npm-packages"

@@ -223,10 +223,10 @@ bindsym $mod+F1 exec "/home/brandon/scripts/volume-notify mute"
 # bindsym Scroll_Lock
 # bindsym XF86Search
 # for these to work, the acpilight version of xbacklight must be used--see github for instructions on setting up
-bindsym XF86MonBrightnessDown exec brightnessctl --device='amdgpu_bl2' set 5%- && brightnessctl --device='nvidia_0' set 5%-
-bindsym XF86MonBrightnessUp exec brightnessctl --device='amdgpu_bl2' set +5% && brightnessctl --device='nvidia_0' set +5%
-bindsym $mod+F7 exec brightnessctl --device='amdgpu_bl2' set 5%- && brightnessctl --device='nvidia_0' set 5%-
-bindsym $mod+F8 exec brightnessctl --device='amdgpu_bl2' set +5% && brightnessctl --device='nvidia_0' set +5%
+bindsym XF86MonBrightnessDown exec brightnessctl set 5%-
+bindsym XF86MonBrightnessUp exec brightnessctl set +5%
+bindsym $mod+F7 exec brightnessctl set 5%-
+bindsym $mod+F8 exec brightnessctl set +5%
 
 include /etc/sway/config.d/*
 
@@ -246,7 +246,7 @@ include /etc/sway/config.d/*
 
 # Touchpad speed for wayland
 # see zerfix's info here: https://github.com/swaywm/sway/issues/3174#issuecomment-626690935
-input 2362:628:PIXA3854:00_093A:0274_Touchpad {
+input 2362:4931:PIXA3854:00_093A:1343_Touchpad {
     accel_profile adaptive
     pointer_accel -0.05
     dwt enabled
@@ -274,6 +274,12 @@ input 1149:33128:Expert_Mouse_TB800_EQ_Wired_Expert_Mouse_TB800_EQ_Wired_Keyboar
 
 input 1149:33128:Expert_Mouse_TB800_EQ_Wired_Expert_Mouse_TB800_EQ_Wired {
       pointer_accel -0.5
+}
+
+# Elecom HUGE PLUS trackball -- 2.4GHz dongle (056e:01ab). The wired unit
+# enumerates as a DIFFERENT PID (056e:01aa) and needs its own block.
+input 1390:427:HUGE_PLUS_HUGE_PLUS {
+      pointer_accel -0.6
 }
 
 # input 2362:628:PIXA3854:00_093A:0274_Mouse {
