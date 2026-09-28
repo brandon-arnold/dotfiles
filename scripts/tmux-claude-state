@@ -11,12 +11,16 @@ them after a reboot or power loss. Nothing here is run by hand:
   end      Claude SessionEnd hook. Forgets the pane, but only when Claude was
            quit on purpose (/exit, Ctrl-D). A crash, reboot or power
            loss leaves the entry, which is the point.
-  prune    tmux pane-exited / window-unlinked hooks. Forgets panes that were
-           closed while this tmux server is running.
-  restore  Sway exec at login. Recreates every recorded tmux session, window
-           and pane, each running `claude --resume <uuid> --remote-control <window
-           name>; exec zsh`. Sessions
-           that already exist are left alone.
+  sync     tmux hooks (panes closed; sessions/windows renamed, moved, swapped).
+           Re-reads every pane from tmux: forgets closed panes, updates names and
+           positions at once, and picks up any Claude pane not yet recorded,
+           reading its session from ~/.claude/sessions/<pid>.json. `prune` is
+           the old name and still works.
+  restore  At login (.zprofile) or at boot (tmux-claude-restore.service on a
+           host nobody logs in to). Recreates every recorded tmux session,
+           window and pane, each running `claude --resume <uuid>
+           --remote-control <window name>; exec zsh`. Sessions that already
+           exist are left alone; a second concurrent restore exits.
   show     Print the recorded state (for looking, not needed day to day).
 
 State: ~/.local/state/tmux-claude/state.json   Log: ~/.local/state/tmux-claude/log
@@ -42,6 +46,9 @@ STATE = STATE_DIR / "state.json"
 LOCK = STATE_DIR / "lock"
 LOG = STATE_DIR / "log"
 LOG_MAX = 256 * 1024
+# Claude writes one file per running process here: {pid, sessionId, cwd, kind}.
+SESSIONS_DIR = Path(os.environ.get("TMUX_CLAUDE_SESSIONS_DIR",
+                                   Path.home() / ".claude/sessions"))
 
 # SessionEnd reasons that mean "I'm done with this one". Anything else
 # ("other", i.e. killed) keeps the entry so it comes back after a reboot.
@@ -183,22 +190,84 @@ def shutting_down():
     return False
 
 
-def cmd_prune():
+def children(pid):
+    try:
+        return [int(c) for c in
+                Path(f"/proc/{pid}/task/{pid}/children").read_text().split()]
+    except (OSError, ValueError):
+        return []
+
+
+def claude_session(pane_pid):
+    """The interactive Claude running in a pane, from Claude's own per-process
+    file. It carries the current session ID, so it follows /clear."""
+    for pid in [pane_pid, *children(pane_pid)]:
+        try:
+            d = json.loads((SESSIONS_DIR / f"{pid}.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if d.get("kind") == "interactive" and d.get("sessionId"):
+            return d
+    return None
+
+
+def live_panes():
+    fmt = "\t".join(["#{pane_id}", "#{pane_pid}", "#{session_name}",
+                     "#{window_index}", "#{window_name}", "#{pane_index}",
+                     "#{window_layout}"])
+    out = tmux("list-panes", "-a", "-F", fmt)
+    if out is None:
+        return None
+    panes = {}
+    for line in filter(None, out.split("\n")):
+        pid, ppid, s, w, name, p, layout = line.split("\t")
+        panes[pid] = {"pane_pid": int(ppid), "session": s, "window": int(w),
+                      "window_name": name, "pane": int(p), "layout": layout}
+    return panes
+
+
+def cmd_sync():
     if shutting_down():
-        log("prune skipped: shutting down")
+        log("sync skipped: shutting down")
         return
     server = tmux("display-message", "-p", "#{pid}")
-    live = tmux("list-panes", "-a", "-F", "#{pane_id}")
-    if not server or live is None:
+    panes = live_panes()
+    if not server or panes is None:
         return
-    live = set(live.split())
+    server = int(server)
+    now = time.strftime("%F %T")
+    notes = []
     with state() as entries:
-        gone = [e for e in entries if e.get("server_pid") == int(server)
-                and e.get("pane_id") not in live]
-        if gone:
-            entries[:] = [e for e in entries if e not in gone]
-    for e in gone:
-        log(f"prune {e['session']}:{e['window']}.{e['pane']} '{e['window_name']}' {e['uuid']}")
+        mine = {e["pane_id"]: e for e in entries
+                if e.get("server_pid") == server and e.get("pane_id")}
+        # Closed while this server runs. (Entries from before a reboot belong
+        # to another server and wait for their restored Claude to re-register.)
+        for pid, e in mine.items():
+            if pid not in panes:
+                entries.remove(e)
+                notes.append(f"forget {e['session']}:{e['window']}.{e['pane']} "
+                             f"'{e['window_name']}' {e['uuid']}")
+        for pid, p in panes.items():
+            info = {k: p[k] for k in ("session", "window", "window_name",
+                                      "pane", "layout")}
+            sess = claude_session(p["pane_pid"])
+            e = mine.get(pid)
+            if e is None and sess is None:
+                continue          # not a Claude pane, or Claude still starting
+            uuid = sess["sessionId"] if sess else e["uuid"]
+            new = {**info, "server_pid": server, "pane_id": pid, "uuid": uuid,
+                   "cwd": (sess or {}).get("cwd") or (e or {}).get("cwd"),
+                   "updated": now}
+            if e and all(e.get(k) == new[k] for k in new if k != "updated"):
+                continue
+            entries[:] = [x for x in entries if x is not e and
+                          x["uuid"] != uuid and pos(x) != pos(new)]
+            entries.append(new)
+            what = "update" if e else "pick up"
+            notes.append(f"{what} {new['session']}:{new['window']}.{new['pane']} "
+                         f"'{new['window_name']}' {uuid}")
+    for n in notes:
+        log(f"sync: {n}")
 
 
 def claude_bin():
@@ -207,6 +276,12 @@ def claude_bin():
 
 
 def cmd_restore():
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    guard = (STATE_DIR / "restore.lock").open("w")
+    try:
+        fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return                    # another restore (login + boot) is running
     with state() as entries:
         snapshot = [dict(e) for e in entries]
     if not snapshot:
@@ -259,7 +334,8 @@ def cmd_show():
                   f"{e['uuid']}  {e['cwd']}  ({e['updated']})")
 
 
-COMMANDS = {"record": cmd_record, "end": cmd_end, "prune": cmd_prune,
+COMMANDS = {"record": cmd_record, "end": cmd_end, "sync": cmd_sync,
+            "prune": cmd_sync,
             "restore": cmd_restore, "show": cmd_show}
 
 if __name__ == "__main__":
