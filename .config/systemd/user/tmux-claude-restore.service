@@ -1,0 +1,18 @@
+[Unit]
+Description=Rebuild tmux sessions with their Claude panes after a reboot (tmux-claude-state)
+Documentation=file://%h/scripts/tmux-claude-state
+
+# Enabled only on hosts nobody logs in to after a power cut (goatbox-lab, which
+# lingers). On the laptop the restore runs from ~/.zprofile at login instead.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# tmux and every Claude session it starts outlive this unit; never kill them if
+# the unit is stopped or restarted.
+KillMode=process
+# A login shell, so tmux and Claude get the normal PATH and environment.
+ExecStart=/usr/bin/zsh -l -c 'exec %h/scripts/tmux-claude-state restore'
+
+[Install]
+WantedBy=default.target

@@ -106,5 +106,6 @@ export PATH=$PATH:$(npm get prefix)/bin
 
 # At login, rebuild tmux sessions with their Claude panes after a reboot or power
 # loss (~/scripts/tmux-claude-state). Skipped inside tmux, whose panes are login
-# shells too; sessions that already exist are left alone.
-[[ -z $TMUX ]] && ~/scripts/tmux-claude-state restore &>/dev/null &!
+# shells too, and inside systemd (INVOCATION_ID), where tmux-claude-restore.service
+# runs it itself. Sessions that already exist are left alone.
+[[ -z $TMUX && -z $INVOCATION_ID ]] && ~/scripts/tmux-claude-state restore &>/dev/null &!
