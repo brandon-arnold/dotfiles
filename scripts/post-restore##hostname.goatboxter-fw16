@@ -1,0 +1,281 @@
+#!/bin/bash
+
+#####################################################
+##
+## post-restore
+##
+## First-boot checklist for goatboxter-fw16 after system-restore, and a
+## general health check any other day. Run as brandon, inside Sway.
+##
+##   post-restore          check only; changes nothing
+##   post-restore --fix    also apply the fixes that can be automated (sudo)
+##
+## Every check detects whether it is needed, so it is safe to re-run.
+## Things only a human can do (BIOS, fingerprint, pairing) are reported
+## as TODO with the exact step.
+##
+## The why behind each check lives in secondbrain:
+##   02_areas/infrastructure/backups.md  ("Restoring onto different hardware")
+##   02_areas/infrastructure/fw16-replica-parts.md  (BIOS settings)
+##
+## Exit status: 0 when everything is OK, 1 when anything needs attention.
+##
+#####################################################
+
+set -uo pipefail
+
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[1;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+FIX=0
+[[ "${1:-}" == "--fix" ]] && FIX=1
+
+ISSUES=0
+
+section() { echo ""; echo -e "${BOLD}== $* ==${NC}"; }
+ok()      { echo -e "   ${GREEN}OK${NC}    $*"; }
+info()    { echo -e "   ${CYAN}INFO${NC}  $*"; }
+todo()    { echo -e "   ${YELLOW}TODO${NC}  $*"; ISSUES=$((ISSUES + 1)); }
+bad()     { echo -e "   ${RED}FAIL${NC}  $*"; ISSUES=$((ISSUES + 1)); }
+fixed()   { echo -e "   ${GREEN}FIXED${NC} $*"; }
+
+SWAY_CONFIG="$HOME/.config/sway/config"
+KANSHI_CONFIG="$HOME/.config/kanshi/config"
+
+#####################################################
+## BIOS — not in any image, so a new board comes up with its own defaults
+#####################################################
+
+section "BIOS settings"
+
+# iGPU UMA carve-out. Reserved RAM, not shared: a 48 GB default on the
+# 2026 board left 46.8 of 96 GiB usable. 4 GB is ~4x what a full Sway
+# desktop uses; the GTT pool lends more on demand.
+UMA_WANT_GIB=4
+AMD_CARD=""
+for c in /sys/class/drm/card[0-9]; do
+    drv=$(basename "$(readlink -f "$c/device/driver")" 2>/dev/null)
+    [[ "$drv" == amdgpu ]] && { AMD_CARD=$c; break; }
+done
+if [[ -z "$AMD_CARD" ]]; then
+    bad "no amdgpu card found — cannot check the UMA carve-out"
+else
+    vram=$(cat "$AMD_CARD/device/mem_info_vram_total")
+    vram_gib=$((vram / 1024 / 1024 / 1024))
+    if [[ $vram_gib -eq $UMA_WANT_GIB ]]; then
+        ok "iGPU UMA carve-out is ${vram_gib} GiB"
+    else
+        todo "iGPU UMA carve-out is ${vram_gib} GiB, want ${UMA_WANT_GIB}. BIOS → set it, reboot"
+    fi
+fi
+
+mem_gib=$(awk '/MemTotal/ {printf "%d", $2 / 1024 / 1024}' /proc/meminfo)
+info "usable RAM ${mem_gib} GiB (96 installed, minus carve-out and ~2 GiB firmware)"
+
+# Graphics mode must be Hybrid: Sway is pinned to amdgpu and will not
+# start on a dGPU-only display path. Getting this far in Sway proves it.
+if [[ -n "${SWAYSOCK:-}" ]]; then
+    ok "Sway is running, so graphics mode is Hybrid"
+else
+    info "not inside Sway — cannot confirm Hybrid graphics mode"
+fi
+
+#####################################################
+## Hardware-bound state — sealed to the old TPM, sensor or radio
+#####################################################
+
+section "Hardware-bound state"
+
+# libvirtd's credential is sealed to the TPM that wrote it. On new
+# hardware the unit dies with 243/CREDENTIALS. Deleting the key lets
+# virt-secret-init-encryption regenerate one for this TPM.
+LIBVIRT_KEY=/var/lib/libvirt/secrets/secrets-encryption-key
+if systemctl is-active --quiet libvirtd; then
+    ok "libvirtd is running"
+elif [[ "$(systemctl show libvirtd -p ExecMainStatus --value)" == 243 ]]; then
+    if [[ $FIX -eq 1 ]]; then
+        sudo rm -f "$LIBVIRT_KEY" && sudo systemctl restart libvirtd \
+            && fixed "libvirtd key regenerated for this TPM, service restarted" \
+            || bad "libvirtd key reset failed — see journalctl -u libvirtd"
+    else
+        todo "libvirtd failed on its TPM-sealed key. Run: post-restore --fix"
+    fi
+else
+    info "libvirtd not running (socket-activated, or not started yet)"
+fi
+
+# Goodix matches on-chip; templates live in the sensor, not the disk.
+if fprintd-list "$USER" 2>/dev/null | grep -q ' - #'; then
+    ok "fingerprint enrolled"
+else
+    todo "no fingerprint on this sensor. Run: fprintd-enroll   (sudo falls back to password until then)"
+fi
+
+# Bonds are filed under the controller's MAC; a new radio sees none.
+paired=$(bluetoothctl devices Paired 2>/dev/null | wc -l)
+if [[ $paired -gt 0 ]]; then
+    ok "$paired Bluetooth device(s) paired"
+else
+    todo "no Bluetooth pairings. Re-pair each device, starting with the keyboard you type on"
+fi
+
+#####################################################
+## Config that names devices — breaks silently on different hardware
+#####################################################
+
+section "Device names in config"
+
+# brightnessctl --device=NAME: the backlight names differ between boards
+# (amdgpu_bl2 / nvidia_0 on the old one, nvidia_wmi_ec_backlight now).
+if [[ -f "$SWAY_CONFIG" ]]; then
+    names=$(grep -v '^\s*#' "$SWAY_CONFIG" | grep -oE -e "--device[= ]'?[A-Za-z0-9_:.-]+" \
+        | sed -E "s/--device[= ]'?//" | sort -u)
+    if [[ -z "$names" ]]; then
+        ok "Sway config names no backlight device"
+    else
+        for n in $names; do
+            if [[ -e "/sys/class/backlight/$n" || -e "/sys/class/leds/$n" ]]; then
+                ok "backlight '$n' exists"
+            else
+                bad "Sway config names backlight '$n', which does not exist here: $(ls /sys/class/backlight | tr '\n' ' ')"
+            fi
+        done
+    fi
+fi
+
+# Built-in pointers (touchpad) must match an `input` block, or they get
+# default settings. Peripherals come and go, so only report those.
+if [[ -n "${SWAYSOCK:-}" && -f "$SWAY_CONFIG" ]]; then
+    configured=$(grep -v '^\s*#' "$SWAY_CONFIG" | awk '$1 == "input" {print $2}' | tr -d '"')
+    while read -r type ident; do
+        [[ -z "$ident" ]] && continue
+        # keyboards expose Consumer_Control / Mouse / Keyboard pointer nodes
+        [[ "$ident" =~ (Consumer_Control|_Keyboard)$ || "$ident" == *Virtual_HID* ]] && continue
+        if grep -qxF "$ident" <<<"$configured"; then
+            ok "$type $ident has a Sway input block"
+        elif grep -q "^${ident%%:[!:]*}:" <<<"$configured"; then
+            continue    # a sibling node of a device that is configured
+        elif [[ "$type" == touchpad ]]; then
+            bad "touchpad $ident has no Sway input block (tap, natural scroll lost)"
+        else
+            info "$type $ident has no Sway input block — default sensitivity"
+        fi
+    done < <(swaymsg -t get_inputs -r | python3 -c '
+import json, sys
+for d in json.load(sys.stdin):
+    if d["type"] in ("pointer", "touchpad"):
+        print(d["type"], d["identifier"])')
+fi
+
+# kanshi matches by connector name (eDP-1, DP-10 ...), which depends on
+# the card enumeration. Check that the outputs connected right now have
+# a profile.
+if [[ -n "${SWAYSOCK:-}" && -f "$KANSHI_CONFIG" ]]; then
+    connected=$(swaymsg -t get_outputs -r | python3 -c '
+import json, sys
+print(" ".join(sorted(o["name"] for o in json.load(sys.stdin))))')
+    match=$(python3 - "$KANSHI_CONFIG" "$connected" <<'EOF'
+import re, sys
+text = re.sub(r"#.*", "", open(sys.argv[1]).read())
+want = set(sys.argv[2].split())
+for name, body in re.findall(r"profile\s+(\S+)\s*\{(.*?)\}", text, re.S):
+    if set(re.findall(r"output\s+(\S+)", body)) == want:
+        print(name)
+        break
+EOF
+)
+    if [[ -n "$match" ]]; then
+        ok "kanshi profile '$match' covers the connected outputs ($connected)"
+    else
+        todo "no kanshi profile for the connected outputs ($connected). Add one to $KANSHI_CONFIG"
+    fi
+fi
+
+#####################################################
+## Data that is not in the image
+#####################################################
+
+section "Data outside the image"
+
+# Dropbox is not backed up — it is its own replicated store. First-run
+# setup refuses a mountpoint; the working procedure is in backups.md
+# ("Getting Dropbox back onto its volume"). Short form:
+#   umount ~/Dropbox; link headless (DISPLAY, WAYLAND_DISPLAY unset);
+#   let files start landing; stop; copy onto the volume; mount; restart.
+if [[ -f "$HOME/.dropbox/info.json" ]] && findmnt -n "$HOME/Dropbox" >/dev/null; then
+    ok "Dropbox linked, on its own volume"
+elif [[ -f "$HOME/.dropbox/info.json" ]]; then
+    todo "Dropbox linked but ~/Dropbox is not mounted on its volume — finish the swap (backups.md)"
+else
+    todo "Dropbox not linked. Follow backups.md → 'Getting Dropbox back onto its volume'"
+fi
+
+steam_lib="$HOME/steam/SteamLibrary"
+if [[ -d "$steam_lib/steamapps/common" ]] && [[ -n "$(ls -A "$steam_lib/steamapps/common" 2>/dev/null)" ]]; then
+    ok "Steam library has games installed"
+else
+    info "Steam library is empty — excluded from backups, reinstall games as wanted"
+fi
+
+#####################################################
+## Things already broken on the old machine that a restore carries over
+#####################################################
+
+section "System health"
+
+# A udev rule with an unresolvable GROUP= is ignored whole, TAG+="uaccess"
+# included — this is what kept VIA / keyboard.frame.work out of hidraw.
+for g in $(grep -hoE 'GROUP="[^"]+"' /etc/udev/rules.d/*.rules 2>/dev/null \
+        | cut -d'"' -f2 | sort -u); do
+    if getent group "$g" >/dev/null; then
+        ok "udev GROUP=\"$g\" resolves"
+    else
+        bad "udev rules use GROUP=\"$g\", which does not exist — those whole rules are ignored: $(grep -lF "GROUP=\"$g\"" /etc/udev/rules.d/*.rules | tr '\n' ' ')"
+    fi
+done
+
+# Default-drop inet filter blocks libvirt guests unless virbr0 is allowed
+# there; libvirt's own table cannot override a drop.
+vir=$(grep -v '^\s*#' /etc/nftables.conf 2>/dev/null | grep -c virbr0)
+if [[ $vir -ge 4 ]]; then
+    ok "nftables.conf allows virbr0 ($vir rules)"
+else
+    bad "nftables.conf has $vir virbr0 rules, want 4 — the Win11 VM will get no network"
+fi
+
+for t in system-image-backup.timer system-backup-nas-sync.timer personal-backup.timer; do
+    if systemctl is-active --quiet "$t"; then
+        ok "$t active"
+    else
+        bad "$t is not active. Run: sudo systemctl enable --now $t"
+    fi
+done
+
+# Failing identically since before the 2026-09-24 restore; harmless.
+KNOWN_FAILED="systemd-networkd-wait-online.service"
+while read -r unit; do
+    [[ -z "$unit" ]] && continue
+    if [[ " $KNOWN_FAILED " == *" $unit "* ]]; then
+        info "$unit failed (known, harmless)"
+    else
+        bad "$unit failed. See: systemctl status $unit"
+    fi
+done < <(systemctl --failed --no-legend --plain | awk '{print $1}')
+
+#####################################################
+## Summary
+#####################################################
+
+echo ""
+if [[ $ISSUES -eq 0 ]]; then
+    echo -e "${GREEN}${BOLD}All checks passed.${NC}"
+    exit 0
+else
+    echo -e "${YELLOW}${BOLD}$ISSUES item(s) need attention.${NC}"
+    [[ $FIX -eq 0 ]] && echo "Items marked 'post-restore --fix' can be applied automatically."
+    exit 1
+fi
