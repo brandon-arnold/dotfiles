@@ -103,3 +103,8 @@ alias du="ncdu --color dark -rr -x --exclude .git --exclude node_modules --enabl
 # fi
 
 export PATH=$PATH:$(npm get prefix)/bin
+
+# At login, rebuild tmux sessions with their Claude panes after a reboot or power
+# loss (~/scripts/tmux-claude-state). Skipped inside tmux, whose panes are login
+# shells too; sessions that already exist are left alone.
+[[ -z $TMUX ]] && ~/scripts/tmux-claude-state restore &>/dev/null &!

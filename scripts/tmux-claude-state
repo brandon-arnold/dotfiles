@@ -1,0 +1,274 @@
+#!/usr/bin/env python3
+"""
+tmux-claude-state
+
+Remembers which tmux panes are running which Claude Code sessions, and rebuilds
+them after a reboot or power loss. Nothing here is run by hand:
+
+  record   Claude SessionStart + UserPromptSubmit hooks. Registers this pane's
+           session UUID with its tmux session/window/pane, name, layout and cwd.
+           Idempotent, so running it on every prompt keeps names and layout current.
+  end      Claude SessionEnd hook. Forgets the pane, but only when Claude was
+           quit on purpose (/exit, Ctrl-D). A crash, reboot or power
+           loss leaves the entry, which is the point.
+  prune    tmux pane-exited / window-unlinked hooks. Forgets panes that were
+           closed while this tmux server is running.
+  restore  Sway exec at login. Recreates every recorded tmux session, window
+           and pane, each running `claude --resume <uuid> --remote-control <window
+           name>; exec zsh`. Sessions
+           that already exist are left alone.
+  show     Print the recorded state (for looking, not needed day to day).
+
+State: ~/.local/state/tmux-claude/state.json   Log: ~/.local/state/tmux-claude/log
+
+Hooks must print nothing on stdout: Claude adds SessionStart and
+UserPromptSubmit output to the conversation.
+"""
+
+import fcntl
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from contextlib import contextmanager
+from pathlib import Path
+
+STATE_DIR = Path(os.environ.get("TMUX_CLAUDE_STATE_DIR",
+                                Path.home() / ".local/state/tmux-claude"))
+STATE = STATE_DIR / "state.json"
+LOCK = STATE_DIR / "lock"
+LOG = STATE_DIR / "log"
+LOG_MAX = 256 * 1024
+
+# SessionEnd reasons that mean "I'm done with this one". Anything else
+# ("other", i.e. killed) keeps the entry so it comes back after a reboot.
+QUIT_REASONS = {"prompt_input_exit"}
+
+
+def log(msg):
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        if LOG.exists() and LOG.stat().st_size > LOG_MAX:
+            LOG.replace(LOG.with_suffix(".old"))
+        with LOG.open("a") as f:
+            f.write(f"{time.strftime('%F %T')} {msg}\n")
+    except OSError:
+        pass
+
+
+@contextmanager
+def state():
+    """Load, yield, and atomically save the entry list under a lock."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with LOCK.open("w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            entries = json.loads(STATE.read_text())
+        except (OSError, ValueError):
+            entries = []
+        before = json.dumps(entries, sort_keys=True)
+        yield entries
+        if json.dumps(entries, sort_keys=True) != before:
+            if STATE.exists():
+                shutil.copy2(STATE, STATE.with_suffix(".prev.json"))
+            tmp = STATE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(entries, indent=2) + "\n")
+            tmp.replace(STATE)
+
+
+# Only for testing against a separate tmux server (tmux -L NAME).
+TMUX_SOCKET = os.environ.get("TMUX_CLAUDE_SOCKET")
+
+
+def tmux(*args, check=False):
+    base = ["tmux", "-L", TMUX_SOCKET] if TMUX_SOCKET else ["tmux"]
+    r = subprocess.run([*base, *args], capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"tmux {' '.join(args)}: {r.stderr.strip()}")
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def hook_input():
+    try:
+        return json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        return {}
+
+
+def interactive_claude():
+    """True unless the Claude that ran this hook is a `claude -p` one-shot."""
+    pid = os.getppid()
+    for _ in range(6):
+        try:
+            argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+            status = Path(f"/proc/{pid}/status").read_text()
+        except OSError:
+            return True
+        args = [a.decode(errors="replace") for a in argv if a]
+        if args and os.path.basename(args[0]) == "claude" or \
+                any(os.path.basename(a) == "claude" for a in args[:2]):
+            return not ({"-p", "--print"} & set(args))
+        pid = int(next(l.split()[1] for l in status.splitlines()
+                       if l.startswith("PPid:")))
+        if pid <= 1:
+            break
+    return True
+
+
+def pane_info(pane_id):
+    fmt = "\t".join(["#{session_name}", "#{window_index}", "#{window_name}",
+                     "#{pane_index}", "#{window_layout}", "#{pid}"])
+    out = tmux("display-message", "-p", "-t", pane_id, fmt)
+    if not out:
+        return None
+    s, w, name, p, layout, server = out.split("\t")
+    return {"session": s, "window": int(w), "window_name": name,
+            "pane": int(p), "layout": layout, "server_pid": int(server)}
+
+
+def pos(e):
+    return (e["session"], e["window"], e["pane"])
+
+
+def cmd_record():
+    data = hook_input()
+    pane_id = os.environ.get("TMUX_PANE")
+    uuid = data.get("session_id")
+    if not pane_id or not uuid or not interactive_claude():
+        return
+    info = pane_info(pane_id)
+    if not info:
+        return
+    entry = {**info, "pane_id": pane_id, "uuid": uuid,
+             "cwd": data.get("cwd") or os.getcwd(),
+             "updated": time.strftime("%F %T")}
+    with state() as entries:
+        old = next((e for e in entries if e["uuid"] == uuid and
+                    e.get("pane_id") == pane_id), None)
+        if old and all(old.get(k) == entry[k] for k in entry if k != "updated"):
+            return
+        entries[:] = [e for e in entries
+                      if e["uuid"] != uuid and pos(e) != pos(entry)]
+        entries.append(entry)
+    if not old:
+        log(f"record {entry['session']}:{entry['window']}.{entry['pane']} "
+            f"'{entry['window_name']}' {uuid} ({data.get('hook_event_name')}"
+            f"/{data.get('source', '')})")
+
+
+def cmd_end():
+    data = hook_input()
+    uuid, reason = data.get("session_id"), data.get("reason")
+    if not uuid:
+        return
+    if reason not in QUIT_REASONS:
+        log(f"end {uuid} reason={reason}: kept")
+        return
+    with state() as entries:
+        entries[:] = [e for e in entries if e["uuid"] != uuid]
+    log(f"end {uuid} reason={reason}: forgotten")
+
+
+def shutting_down():
+    """At reboot or logout, pane processes can die a moment before tmux does,
+    which looks exactly like panes being closed. Never prune then."""
+    for scope in ([], ["--user"]):
+        r = subprocess.run(["systemctl", *scope, "is-system-running"],
+                           capture_output=True, text=True)
+        if r.stdout.strip() == "stopping":
+            return True
+    return False
+
+
+def cmd_prune():
+    if shutting_down():
+        log("prune skipped: shutting down")
+        return
+    server = tmux("display-message", "-p", "#{pid}")
+    live = tmux("list-panes", "-a", "-F", "#{pane_id}")
+    if not server or live is None:
+        return
+    live = set(live.split())
+    with state() as entries:
+        gone = [e for e in entries if e.get("server_pid") == int(server)
+                and e.get("pane_id") not in live]
+        if gone:
+            entries[:] = [e for e in entries if e not in gone]
+    for e in gone:
+        log(f"prune {e['session']}:{e['window']}.{e['pane']} '{e['window_name']}' {e['uuid']}")
+
+
+def claude_bin():
+    return (shutil.which("claude") or
+            str(Path.home() / ".local/bin/claude"))
+
+
+def cmd_restore():
+    with state() as entries:
+        snapshot = [dict(e) for e in entries]
+    if not snapshot:
+        return
+    existing = set((tmux("list-sessions", "-F", "#{session_name}") or "").split("\n"))
+    claude = claude_bin()
+    shell = os.environ.get("SHELL", "/bin/zsh")
+
+    sessions = {}
+    for e in sorted(snapshot, key=pos):
+        sessions.setdefault(e["session"], {}).setdefault(e["window"], []).append(e)
+
+    for sname, windows in sessions.items():
+        if sname in existing:
+            log(f"restore {sname}: already running, skipped")
+            continue
+        first = True
+        for widx, panes in sorted(windows.items()):
+            for i, e in enumerate(panes):
+                # Remote Control is per process, so it is lost at reboot like
+                # everything else; name it after the window so the app lists it.
+                cmd = (f"{claude} --resume {e['uuid']} --remote-control "
+                       f"{shlex.quote(e['window_name'])}; exec {shell}")
+                if first:
+                    tmux("new-session", "-d", "-s", sname, "-n", e["window_name"],
+                         "-c", e["cwd"], cmd, check=True)
+                    base = tmux("display-message", "-p", "-t", f"={sname}:",
+                                "#{window_index}")
+                    if base is not None and int(base) != widx:
+                        tmux("move-window", "-s", f"={sname}:{base}",
+                             "-t", f"={sname}:{widx}", check=True)
+                    first = False
+                elif i == 0:
+                    tmux("new-window", "-d", "-t", f"={sname}:{widx}",
+                         "-n", e["window_name"], "-c", e["cwd"], cmd, check=True)
+                else:
+                    tmux("split-window", "-d", "-t", f"={sname}:{widx}",
+                         "-c", e["cwd"], cmd, check=True)
+            layout = max(panes, key=lambda e: e.get("updated", "")).get("layout")
+            if len(panes) > 1 and layout:
+                tmux("select-layout", "-t", f"={sname}:{widx}", layout)
+        n = sum(len(p) for p in windows.values())
+        log(f"restore {sname}: {len(windows)} window(s), {n} Claude pane(s)")
+
+
+def cmd_show():
+    with state() as entries:
+        for e in sorted(entries, key=pos):
+            print(f"{e['session']}:{e['window']}.{e['pane']}  {e['window_name']:<16} "
+                  f"{e['uuid']}  {e['cwd']}  ({e['updated']})")
+
+
+COMMANDS = {"record": cmd_record, "end": cmd_end, "prune": cmd_prune,
+            "restore": cmd_restore, "show": cmd_show}
+
+if __name__ == "__main__":
+    name = sys.argv[1] if len(sys.argv) > 1 else ""
+    if name not in COMMANDS:
+        sys.exit(f"usage: tmux-claude-state {{{'|'.join(COMMANDS)}}}")
+    try:
+        COMMANDS[name]()
+    except Exception as ex:  # a hook must never break Claude or tmux
+        log(f"{name} failed: {ex!r}")
+        if name in ("restore", "show"):
+            raise
