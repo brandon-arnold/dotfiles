@@ -315,6 +315,7 @@ exec --no-startup-id /usr/lib/mate-polkit/polkit-mate-authentication-agent-1
 exec --no-startup-id wlsunset -l 47.6 -L -122.3
 exec --no-startup-id easyeffects
 exec --no-startup-id blueman-applet
+exec --no-startup-id wispr-flow
 # Insync's window-raise ("Open App Window" / `insync show`) calls QWindow::
 # requestActivate(), which the native Wayland Qt backend refuses (a client
 # can't self-raise). Forcing XWayland (QT_QPA_PLATFORM=xcb) restores it.
