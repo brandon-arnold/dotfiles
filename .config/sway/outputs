@@ -2,7 +2,7 @@
 # Laptop: BOE 16" 2560x1600 ~189 PPI → scale 1.3
 # Externals: Dell AW2721D 27" 2560x1440 ~109 PPI → scale 1.0
 
-output "eDP-1" {
+output "BOE NE160QDM-NZ6 Unknown" {
     scale 1.3
 }
 
