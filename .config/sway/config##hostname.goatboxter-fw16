@@ -314,15 +314,15 @@ bindsym Alt+Control+Delete exec swaylock -f -c 000000
 bindsym --no-repeat F10 exec /home/brandon/scripts/voice-cmd
 bindsym --release F10 exec /home/brandon/scripts/voice-cmd --released
 
-# Ask Claude about the screen by voice (~/scripts/ask): hold F4 and speak (takes a
-# screenshot of the focused window), F5 = follow-up without a screenshot, F6 =
-# stop talking, F7 = new conversation. F4/F5 are also Wispr Flow push-to-talk keys.
-bindsym --no-repeat F4 exec /home/brandon/scripts/ask --listen --screenshot
-bindsym --release F4 exec /home/brandon/scripts/ask --released
-bindsym --no-repeat F5 exec /home/brandon/scripts/ask --listen
+# Ask Claude about the screen by voice (~/scripts/ask): hold F5 and speak (takes a
+# screenshot of the focused window), F6 = follow-up without a screenshot, F7 =
+# stop talking, F8 = new conversation. F5/F6 are also Wispr Flow push-to-talk keys.
+bindsym --no-repeat F5 exec /home/brandon/scripts/ask --listen --screenshot
 bindsym --release F5 exec /home/brandon/scripts/ask --released
-bindsym F6 exec /home/brandon/scripts/ask --stop
-bindsym F7 exec /home/brandon/scripts/ask --new
+bindsym --no-repeat F6 exec /home/brandon/scripts/ask --listen
+bindsym --release F6 exec /home/brandon/scripts/ask --released
+bindsym F7 exec /home/brandon/scripts/ask --stop
+bindsym F8 exec /home/brandon/scripts/ask --new
 
 # F13..F24 jump straight to workspaces 1..12 (keys sent by the Cipulot 4704).
 # Bound by keycode: the default XKB keymap gives these keys keysyms like

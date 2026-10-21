@@ -9,14 +9,14 @@
     ask --new                 forget the conversation
     ask --say TEXT...         just speak TEXT (TTS test)
 
-Sway (F4 = ask about the screen, F5 = follow-up, F6 = stop, F7 = new):
-    bindsym --no-repeat F4 exec ~/scripts/ask --listen --screenshot
-    bindsym --release   F4 exec ~/scripts/ask --released
-    bindsym --no-repeat F5 exec ~/scripts/ask --listen
+Sway (F5 = ask about the screen, F6 = follow-up, F7 = stop, F8 = new):
+    bindsym --no-repeat F5 exec ~/scripts/ask --listen --screenshot
     bindsym --release   F5 exec ~/scripts/ask --released
-    bindsym F6 exec ~/scripts/ask --stop
-    bindsym F7 exec ~/scripts/ask --new
-F4 and F5 are also Wispr Flow push-to-talk keys, so Wispr records while they are
+    bindsym --no-repeat F6 exec ~/scripts/ask --listen
+    bindsym --release   F6 exec ~/scripts/ask --released
+    bindsym F7 exec ~/scripts/ask --stop
+    bindsym F8 exec ~/scripts/ask --new
+F5 and F6 are also Wispr Flow push-to-talk keys, so Wispr records while they are
 held and pastes the transcript into the overlay on release.
 
 Backend: `claude -p` (Claude Code, the subscription) with a saved session id so
@@ -279,7 +279,7 @@ def main(argv):
         with open(OVERLAY_PID, "w") as f:
             f.write(str(os.getpid()))
         try:
-            text, ok, _ = capture(status="listening…  (hold F4/F5, speak, release)",
+            text, ok, _ = capture(status="listening…  (hold F5/F6, speak, release)",
                                   submit=lambda t: (True, "asking Claude…"))
         finally:
             try:
