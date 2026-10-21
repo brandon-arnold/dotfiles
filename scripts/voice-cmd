@@ -22,8 +22,12 @@ Commands (case and punctuation are ignored; number words work; plurals like
     pane left|right|up|down|N    tmux select-pane
     workspace 4 / desktop 4      sway workspace
     move to workspace 4          move the focused container
-    screen left|right            sway focus output   (also monitor/output/display)
+    screen left|right            sway focus output   (also monitor/output/display,
+                                 and "the left screen")
+    screen 3                     sway workspace 3 (screen + number = workspace)
+    next screen / previous screen / back
     move to screen left|right    move the focused container to that output
+    move to screen 3             move the focused container to workspace 3
     focus left|right|up|down     sway focus
     move left|right|up|down      sway move
     fullscreen / floating        toggle
@@ -188,12 +192,30 @@ def parse(text, ctx):
         n = number(m.group(1))
         ws = ["number", str(n)] if n is not None else [m.group(1)]
         return ["swaymsg", "move", "container", "to", "workspace", *ws], f"move to workspace {' '.join(ws)}"
-    m = re.fullmatch(rf"(?:focus |go )?{OUT} ({DIRS})", t)
+    # "screen" means a monitor when followed by a direction, a workspace when
+    # followed by a number: "screen left", "the left screen", "screen 3".
+    m = (re.fullmatch(rf"{GO}(?:focus )?(?:the )?{OUT} ({DIRS})", t)
+         or re.fullmatch(rf"{GO}(?:focus )?(?:the )?({DIRS}) {OUT}", t))
     if m:
         return ["swaymsg", "focus", "output", m.group(1)], f"screen {m.group(1)}"
-    m = re.fullmatch(rf"(?:move|send) (?:this )?(?:to )?{OUT} ({DIRS})", t)
+    m = re.fullmatch(rf"{GO}(?:the )?{OUT} (\S+)", t)
+    if m and number(m.group(1)) is not None:
+        n = number(m.group(1))
+        return ["swaymsg", "workspace", "number", str(n)], f"workspace {n}"
+    m = re.fullmatch(rf"(next|previous|prev) {OUT}", t)
+    if m:
+        which = "prev" if m.group(1) != "next" else "next"
+        return ["swaymsg", "workspace", which], f"workspace {which}"
+    if re.fullmatch(rf"(?:last {OUT}|back|go back|{OUT} back)", t):
+        return ["swaymsg", "workspace", "back_and_forth"], "workspace back"
+    m = (re.fullmatch(rf"(?:move|send) (?:this )?(?:to )?(?:the )?{OUT} ({DIRS})", t)
+         or re.fullmatch(rf"(?:move|send) (?:this )?(?:to )?(?:the )?({DIRS}) {OUT}", t))
     if m:
         return ["swaymsg", "move", "container", "to", "output", m.group(1)], f"move to screen {m.group(1)}"
+    m = re.fullmatch(rf"(?:move|send) (?:this )?(?:to )?{OUT} (\S+)", t)
+    if m and number(m.group(1)) is not None:
+        n = number(m.group(1))
+        return ["swaymsg", "move", "container", "to", "workspace", "number", str(n)], f"move to workspace {n}"
     m = re.fullmatch(rf"focus ({DIRS})", t)
     if m:
         return ["swaymsg", "focus", m.group(1)], f"focus {m.group(1)}"
