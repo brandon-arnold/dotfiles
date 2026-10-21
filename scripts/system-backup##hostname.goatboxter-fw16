@@ -16,7 +16,13 @@
 
 BACKUP_ROOT_PATH="/mnt/backup/"
 DAYS_BETWEEN_BACKUPS=6
-MAX_BACKUP_AGE_DAYS=13
+# A local set is kept until the NAS has a copy (system-backup-nas-sync marks it
+# with a .synced file). Age is only a backstop for sets that never get synced.
+MAX_BACKUP_AGE_DAYS=30
+# Free space required before writing a set: newest complete set's size x this.
+SPACE_MARGIN_PERCENT=120
+# A backup set directory as this script names it (see TIMESTAMP below).
+SET_NAME_RE='^[0-9]{8}-[0-9]{2}h[0-9]{2}$'
 
 OPENCLAW='/home/brandon/.npm-packages/bin/openclaw'
 CHANNEL='1483997048414933106'  # Discord #openclaw-fw16
@@ -54,7 +60,7 @@ cleanup() {
 on_exit() {
     local rc=$?
     cleanup
-    [ "${rc}" -ne 0 ] && notify "Image backup FAILED (exit code ${rc})"
+    [ "${rc}" -ne 0 ] && notify "Image backup FAILED (exit code ${rc})${FAIL_REASON:+: ${FAIL_REASON}}"
     return "${rc}"
 }
 trap on_exit EXIT
@@ -79,11 +85,74 @@ fi
 
 #####################################################
 ##
-## Delete backups older than MAX_BACKUP_AGE_DAYS
+## Prune local backup sets
+##
+## A set lives on this volume so that system-backup-nas-sync can copy it to the
+## NAS, which may be unreachable for days. So a set is deleted only once the NAS
+## has it (.synced marker, written by the sync script), oldest first, and only
+## as far as needed to make room for the set about to be written. The newest
+## complete set always stays as a local restore source. Incomplete sets left by
+## failed runs (no COMPLETE marker) are deleted outright. Complete sets older
+## than MAX_BACKUP_AGE_DAYS are deleted even if never synced.
+##
+## Directories that don't match SET_NAME_RE (hand-made folders) are left alone.
 ##
 #####################################################
 
-find "$BACKUP_ROOT_PATH" -maxdepth 1 -type d -name '20*' -mtime "+$MAX_BACKUP_AGE_DAYS" -exec rm -rf {} +
+# Complete sets, oldest first (the names sort chronologically).
+list_sets() {
+    local d
+    for d in "${BACKUP_ROOT_PATH}"20*/; do
+        d=$(basename "${d}")
+        [[ "${d}" =~ ${SET_NAME_RE} ]] || continue
+        [ -e "${BACKUP_ROOT_PATH}${d}/COMPLETE" ] && echo "${d}"
+    done
+}
+
+free_bytes() {
+    df --output=avail -B1 "${BACKUP_ROOT_PATH}" | tail -n 1
+}
+
+# Incomplete sets from failed runs
+for d in "${BACKUP_ROOT_PATH}"20*/; do
+    d=$(basename "${d}")
+    [[ "${d}" =~ ${SET_NAME_RE} ]] || continue
+    if [ ! -e "${BACKUP_ROOT_PATH}${d}/COMPLETE" ]; then
+        echo "removing incomplete set ${d}"
+        rm -rf "${BACKUP_ROOT_PATH:?}${d}"
+    fi
+done
+
+NEWEST=$(list_sets | tail -n 1)
+
+# Age backstop; never the newest set
+for d in $(list_sets); do
+    [ "${d}" = "${NEWEST}" ] && continue
+    if [ -n "$(find "${BACKUP_ROOT_PATH}${d}/COMPLETE" -mtime "+${MAX_BACKUP_AGE_DAYS}")" ]; then
+        echo "removing set ${d}: older than ${MAX_BACKUP_AGE_DAYS} days"
+        rm -rf "${BACKUP_ROOT_PATH:?}${d}"
+    fi
+done
+
+# Make room: synced sets, oldest first, until the newest set's size plus margin fits
+if [ -n "${NEWEST}" ]; then
+    NEEDED=$(( $(du -sb "${BACKUP_ROOT_PATH}${NEWEST}" | cut -f1) * SPACE_MARGIN_PERCENT / 100 ))
+    for d in $(list_sets); do
+        [ "$(free_bytes)" -ge "${NEEDED}" ] && break
+        [ "${d}" = "${NEWEST}" ] && continue
+        if [ -e "${BACKUP_ROOT_PATH}${d}/.synced" ]; then
+            echo "removing synced set ${d} to make room"
+            rm -rf "${BACKUP_ROOT_PATH:?}${d}"
+        else
+            echo "keeping ${d}: not on the NAS yet"
+        fi
+    done
+    if [ "$(free_bytes)" -lt "${NEEDED}" ]; then
+        FAIL_REASON="need $(( NEEDED / 1024 / 1024 / 1024 )) GiB free on ${BACKUP_ROOT_PATH}, have $(( $(free_bytes) / 1024 / 1024 / 1024 )) GiB, and the remaining sets are not on the NAS yet"
+        echo "${FAIL_REASON}"
+        exit 1
+    fi
+fi
 
 #####################################################
 ##
@@ -288,12 +357,16 @@ VOLGROP='fw16-vg' SNAPVOL='arch-vm2-backup-snap' /home/brandon/scripts/snap-lvm-
 
 #####################################################
 ##
-## Update backuptime
+## Mark the set complete and update backuptime
+##
+## COMPLETE tells system-backup-nas-sync the set may be copied, and tells the
+## prune step above that the set is a candidate to keep.
 ##
 #####################################################
 
 if [[ ${RES} -lt 1 ]]
 then
+    date > "${BACKDIR}/COMPLETE"
     date +%s > "${BACKUP_ROOT_PATH}backuptime.txt"
 else
     echo "error with backup; exiting without updating backuptime: "$(date)

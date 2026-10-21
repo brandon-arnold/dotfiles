@@ -74,24 +74,62 @@ fi
 ##
 ## Sync backup directories to NAS
 ##
-## - Only syncs timestamped backup dirs (20*)
+## - Syncs each timestamped backup dir (20*) on its own
+## - Skips sets system-backup has not finished (no COMPLETE marker); folders
+##   that don't look like a system-backup set are synced as before
+## - After a sync, verifies the NAS copy with a size-only dry run; when nothing
+##   is left to transfer, marks the set .synced so system-backup may prune it
 ## - Partial transfers are resumable via --partial
 ##
 #####################################################
 
-rsync -rltv --omit-dir-times --partial --bwlimit=40m \
-    --include='20*/' \
-    --include='20*/**' \
-    --exclude='*' \
-    -e "ssh -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3" \
-    "${LOCAL_BACKUP_PATH}" "${NAS_HOST}:${NAS_BACKUP_PATH}"
+# A backup set directory as system-backup names it.
+SET_NAME_RE='^[0-9]{8}-[0-9]{2}h[0-9]{2}$'
+RSYNC_SSH="ssh -o BatchMode=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
+SYNC_FAILED=0
 
-RSYNC_EXIT=$?
+for DIR in "${LOCAL_BACKUP_PATH}"20*/; do
+    DIR=$(basename "${DIR}")
+    [ -d "${LOCAL_BACKUP_PATH}${DIR}" ] || continue
+    IS_SET=0
+    [[ "${DIR}" =~ ${SET_NAME_RE} ]] && IS_SET=1
+    if [ "${IS_SET}" -eq 1 ] && [ ! -e "${LOCAL_BACKUP_PATH}${DIR}/COMPLETE" ]; then
+        echo "skipping ${DIR}: system-backup has not completed it"
+        continue
+    fi
 
-if [ ${RSYNC_EXIT} -eq 23 ]; then
-    echo "rsync completed with warnings (code 23, likely permission issues on existing files): $(date)"
-elif [ ${RSYNC_EXIT} -ne 0 ]; then
-    echo "rsync failed with exit code ${RSYNC_EXIT}: $(date)"
+    echo "syncing ${DIR}: $(date)"
+    rsync -rltv --omit-dir-times --partial --bwlimit=40m --exclude='.synced' \
+        -e "${RSYNC_SSH}" \
+        "${LOCAL_BACKUP_PATH}${DIR}" "${NAS_HOST}:${NAS_BACKUP_PATH}"
+    RSYNC_EXIT=$?
+
+    if [ ${RSYNC_EXIT} -eq 23 ]; then
+        echo "rsync completed with warnings (code 23, likely permission issues on existing files): $(date)"
+    elif [ ${RSYNC_EXIT} -ne 0 ]; then
+        echo "rsync failed with exit code ${RSYNC_EXIT} on ${DIR}: $(date)"
+        SYNC_FAILED=1
+        continue
+    fi
+
+    [ "${IS_SET}" -eq 1 ] || continue
+
+    # Verify: a size-only dry run lists whatever the NAS still lacks.
+    PENDING=$(rsync -rl --size-only -n --out-format='%n' --exclude='.synced' \
+        -e "${RSYNC_SSH}" \
+        "${LOCAL_BACKUP_PATH}${DIR}" "${NAS_HOST}:${NAS_BACKUP_PATH}" | grep -v '/$')
+    if [ -z "${PENDING}" ]; then
+        if [ ! -e "${LOCAL_BACKUP_PATH}${DIR}/.synced" ]; then
+            date > "${LOCAL_BACKUP_PATH}${DIR}/.synced"
+            echo "${DIR} verified on NAS, marked .synced"
+        fi
+    else
+        echo "${DIR} not fully on NAS yet, still to transfer:"
+        echo "${PENDING}"
+    fi
+done
+
+if [ "${SYNC_FAILED}" -ne 0 ]; then
     exit 1
 fi
 
