@@ -314,6 +314,20 @@ bindsym Alt+Control+Delete exec swaylock -f -c 000000
 bindsym --no-repeat F10 exec /home/brandon/scripts/voice-cmd
 bindsym --release F10 exec /home/brandon/scripts/voice-cmd --released
 
+# F13..F24 jump straight to workspaces 1..12 (keys sent by the Cipulot 4704).
+bindsym F13 workspace number 1
+bindsym F14 workspace number 2
+bindsym F15 workspace number 3
+bindsym F16 workspace number 4
+bindsym F17 workspace number 5
+bindsym F18 workspace number 6
+bindsym F19 workspace number 7
+bindsym F20 workspace number 8
+bindsym F21 workspace number 9
+bindsym F22 workspace number 10
+bindsym F23 workspace number 11
+bindsym F24 workspace number 12
+
 for_window [app_id="Xpra"] floating enable
 
 exec --no-startup-id nm-applet

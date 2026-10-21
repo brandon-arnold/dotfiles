@@ -345,7 +345,7 @@ def overlay(ctx):
 
     def give_up():
         if not state["done"] and not entry.get_text():
-            Gtk.main_quit()
+            finish(False, f"nothing arrived from Wispr Flow in {WAIT_FOR_TEXT_S} s")
         return False
 
     entry.connect("changed", on_changed)
