@@ -32,9 +32,13 @@ entry { background: transparent; border: none; color: #e6e6ea;
 
 
 def capture(status="listening…  (hold the key, speak, release)", idle_ms=700,
-            wait_s=20, show_result_ms=500, error_ms=1500, submit=None, top_margin=160,
-            invisible=False):
+            wait_s=20, max_hold_s=180, show_result_ms=500, error_ms=1500, submit=None,
+            top_margin=160, invisible=False):
     """Show the overlay and return (text, ok, msg). text is None on cancel/timeout.
+
+    The wait for text is `wait_s` counted from the key RELEASE (SIGUSR1), since
+    Wispr only transcribes after release; while the key is held the only limit
+    is `max_hold_s`.
 
     invisible=True draws nothing at all: the surface still exists (it has to, to
     hold keyboard focus), but it is fully transparent and closes the moment the
@@ -68,7 +72,7 @@ def capture(status="listening…  (hold the key, speak, release)", idle_ms=700,
         show_result_ms = error_ms = 1
 
     result = {"text": None, "ok": False, "msg": "cancelled"}
-    state = {"idle_id": None, "done": False}
+    state = {"idle_id": None, "done": False, "giveup_id": None}
 
     def finish(ok, msg):
         if state["done"]:
@@ -113,27 +117,33 @@ def capture(status="listening…  (hold the key, speak, release)", idle_ms=700,
             return True
         return False
 
+    def give_up():
+        if not state["done"] and not entry.get_text():
+            finish(False, f"nothing arrived from Wispr Flow in {wait_s} s after release")
+        return False
+
     def on_released(*_):
         if not state["done"] and not entry.get_text():
             label.set_text("transcribing…")
+            if state["giveup_id"]:
+                GLib.source_remove(state["giveup_id"])
+            state["giveup_id"] = GLib.timeout_add_seconds(wait_s, give_up)
         return True
 
-    def give_up():
+    def hold_limit():
         if not state["done"] and not entry.get_text():
-            finish(False, f"nothing arrived from Wispr Flow in {wait_s} s")
+            finish(False, f"key held for {max_hold_s} s with no text, giving up")
         return False
 
     entry.connect("changed", on_changed)
     win.connect("key-press-event", on_key)
     win.connect("destroy", Gtk.main_quit)
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, on_released)
-    GLib.timeout_add_seconds(wait_s, give_up)
+    state["giveup_id"] = GLib.timeout_add_seconds(max_hold_s, hold_limit)
 
     win.show_all()
     entry.grab_focus()
     Gtk.main()
-    try:
-        win.destroy()
-    except Exception:
-        pass
+    win.disconnect_by_func(Gtk.main_quit)   # destroying after the loop ended must not re-quit
+    win.destroy()
     return result["text"], result["ok"], result["msg"]
