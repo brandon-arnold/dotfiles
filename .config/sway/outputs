@@ -1,4 +1,4 @@
-# Per-monitor scaling
+# Per-monitor scaling, matched by "make model serial" (see kanshi config)
 # Laptop: BOE 16" 2560x1600 ~189 PPI → scale 1.3
 # Externals: Dell AW2721D 27" 2560x1440 ~109 PPI → scale 1.0
 
@@ -6,10 +6,10 @@ output "BOE NE160QDM-NZ6 Unknown" {
     scale 1.3
 }
 
-output "DP-11" {
+output "Dell Inc. Dell AW2721D #GTIYMxgwABVe" {
     scale 1.0
 }
 
-output "DP-10" {
+output "Dell Inc. Dell AW2721D #GjMYMxgwAAMb" {
     scale 1.0
 }

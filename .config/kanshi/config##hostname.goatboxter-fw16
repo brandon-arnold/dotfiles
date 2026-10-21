@@ -1,37 +1,27 @@
+# Outputs are matched by "make model serial", not by connector name:
+# the DP-N numbers the dock's monitors get depend on MST probe order and
+# have changed across reboots (DP-10/11, DP-12/13, DP-9/10 ...).
+# Get the identifiers from: swaymsg -t get_outputs  (make, model, serial)
+# Both Dells hang off one DP link through the dock; Sway rejects anything above
+# 60 Hz on either of them (tested 100/120/144 on 2026-10-21), so pin 60 Hz.
+
 profile mobile {
         output "BOE NE160QDM-NZ6 Unknown" enable scale 1.3
 }
 
-profile external_monitors_connected {
+# Docked: both Dell AW2721D monitors, laptop panel off.
+profile docked {
         output "BOE NE160QDM-NZ6 Unknown" disable
-        output DP-1 enable mode 2560x1440 position 0,0
-        output DP-5 enable mode 2560x1440 position 2560,0
+        output "Dell Inc. Dell AW2721D #GTIYMxgwABVe" enable mode 2560x1440@60Hz position 0,0
+        output "Dell Inc. Dell AW2721D #GjMYMxgwAAMb" enable mode 2560x1440@60Hz position 2560,0
 }
 
-profile external_monitors_connected_2 {
+profile docked_left_only {
         output "BOE NE160QDM-NZ6 Unknown" disable
-        output DP-4 enable mode 2560x1440 position 0,0
-        output DP-3 enable mode 2560x1440 position 2560,0
+        output "Dell Inc. Dell AW2721D #GTIYMxgwABVe" enable mode 2560x1440@60Hz position 0,0
 }
 
-profile external_monitor_1_connected {
+profile docked_right_only {
         output "BOE NE160QDM-NZ6 Unknown" disable
-        output DP-1 enable mode 2560x1440 position 0,0
-}
-
-profile external_monitor_2_connected {
-        output "BOE NE160QDM-NZ6 Unknown" disable
-        output DP-5 enable mode 2560x1440 position 0,0
-}
-
-profile anker_575_dock {
-	output "BOE NE160QDM-NZ6 Unknown" disable
-	output DP-11 enable mode 2560x1440 position 0,0
-	output DP-10 enable mode 2560x1440 position 2560,0
-}
-
-profile anker_575_dock2 {
-	output "BOE NE160QDM-NZ6 Unknown" disable
-	output DP-13 enable mode 2560x1440 position 0,0
-	output DP-12 enable mode 2560x1440 position 2560,0
+        output "Dell Inc. Dell AW2721D #GjMYMxgwAAMb" enable mode 2560x1440@60Hz position 0,0
 }

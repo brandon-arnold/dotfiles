@@ -1,0 +1,387 @@
+#!/usr/bin/env python3
+"""voice-cmd — dictate a Sway / tmux command with Wispr Flow and run it.
+
+Hold F10: Sway runs `voice-cmd`, which pops a small keyboard-exclusive overlay
+(wlr layer shell) at the top of the screen. F10 is also Wispr Flow's push-to-talk
+key, so Wispr records while F10 is held and, on release, pastes the transcript
+into whatever has keyboard focus — the overlay. When the pasted text has been
+stable for a moment the overlay parses it, runs the matching command, flashes
+what it did, and closes. Nothing is ever pasted into the real window.
+
+    voice-cmd                 press handler: show the overlay and wait for text
+    voice-cmd --released      release handler: just updates the overlay's status
+    voice-cmd --run TEXT      run TEXT as a command without the overlay
+    voice-cmd --dry-run TEXT  print what TEXT would run
+
+Commands (case and punctuation are ignored; number words work; plurals like
+"windows 3" are accepted everywhere):
+    window 3 / tab 3 / 3         tmux select-window in the focused terminal's session
+    window claude                tmux window by name
+    next window / previous window / last window
+    session NAME                 tmux switch-client
+    pane left|right|up|down|N    tmux select-pane
+    workspace 4 / desktop 4      sway workspace
+    move to workspace 4          move the focused container
+    screen left|right            sway focus output   (also monitor/output/display)
+    move to screen left|right    move the focused container to that output
+    focus left|right|up|down     sway focus
+    move left|right|up|down      sway move
+    fullscreen / floating        toggle
+    close window                 sway kill
+    split horizontal|vertical, layout tabbed|stacking|toggle split
+
+tmux target: the client running inside the window that had focus when F10 was
+pressed; otherwise the most recently active client.
+"""
+import json
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+
+IDLE_MS = 700          # text unchanged this long → run it
+WAIT_FOR_TEXT_S = 20   # no text at all after this → give up
+SHOW_RESULT_MS = 500
+
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+PIDFILE = os.path.join(RUNTIME, "voice-cmd.pid")
+
+NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+    # common ASR homophones in the number slot
+    "to": 2, "too": 2, "for": 4, "won": 1, "ate": 8,
+}
+
+
+# ----------------------------------------------------------------------------
+# helpers
+
+def sh(*argv, check=False):
+    return subprocess.run(argv, capture_output=True, text=True, check=check)
+
+
+def swaymsg(*args):
+    return sh("swaymsg", *args)
+
+
+def focused_window_pid():
+    """pid of the Sway container that currently has focus (None if unknown)."""
+    try:
+        tree = json.loads(swaymsg("-t", "get_tree").stdout)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    def walk(node):
+        if node.get("focused"):
+            return node.get("pid")
+        for child in node.get("nodes", []) + node.get("floating_nodes", []):
+            found = walk(child)
+            if found:
+                return found
+        return None
+
+    return walk(tree)
+
+
+def ancestors(pid):
+    """pids from pid up to init, read from /proc."""
+    out = []
+    while pid and pid > 1:
+        out.append(pid)
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                pid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return out
+
+
+def tmux_session_for(window_pid):
+    """Session of the tmux client running under window_pid, else the most recently
+    used client's session, else None."""
+    r = sh("tmux", "list-clients", "-F", "#{client_pid} #{session_name} #{client_activity}")
+    if r.returncode != 0:
+        return None
+    best, best_act = None, -1
+    for line in r.stdout.splitlines():
+        try:
+            cpid, session, activity = line.split(" ", 2)
+            cpid, activity = int(cpid), int(activity)
+        except ValueError:
+            continue
+        if window_pid and window_pid in ancestors(cpid):
+            return session
+        if activity > best_act:
+            best, best_act = session, activity
+    return best
+
+
+def number(word):
+    if word.isdigit():
+        return int(word)
+    return NUMBER_WORDS.get(word)
+
+
+def normalize(text):
+    text = text.lower()
+    text = re.sub(r"[^\w\s-]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+# ----------------------------------------------------------------------------
+# grammar
+
+DIRS = "left|right|up|down"
+WS = r"(?:workspaces?|desktops?|spaces?)"
+OUT = r"(?:screens?|monitors?|outputs?|displays?)"
+GO = r"(?:go to |switch to |goto )?"
+
+
+def parse(text, ctx):
+    """Return (argv, description) for the command in text, or None."""
+    t = normalize(text)
+    session = ctx.get("session")
+
+    def tmux(*args):
+        return ["tmux", *args]
+
+    def tmux_target(suffix=""):
+        return f"{session}{suffix}" if session else suffix.lstrip(":")
+
+    m = re.fullmatch(rf"{GO}(?:tmux )?(?:windows?|tabs?) (\S+)", t) or re.fullmatch(r"(\d+|\w+)", t)
+    if m:
+        n = number(m.group(1))
+        target = tmux_target(f":{n if n is not None else m.group(1)}")
+        if n is not None or re.fullmatch(rf"{GO}(?:tmux )?(?:windows?|tabs?) \S+", t):
+            return tmux("select-window", "-t", target), f"tmux window {target}"
+    m = re.fullmatch(r"(next|previous|prev|last) (?:windows?|tabs?)", t)
+    if m:
+        verb = {"prev": "previous"}.get(m.group(1), m.group(1))
+        return tmux(f"{verb}-window", "-t", tmux_target()), f"tmux {verb} window"
+    m = re.fullmatch(rf"{GO}sessions? (\S+)", t)
+    if m:
+        return tmux("switch-client", "-t", m.group(1)), f"tmux session {m.group(1)}"
+    m = re.fullmatch(rf"panes? ({DIRS}|\S+)", t)
+    if m:
+        d = m.group(1)
+        flag = {"left": "-L", "right": "-R", "up": "-U", "down": "-D"}.get(d)
+        if flag:
+            return tmux("select-pane", flag, "-t", tmux_target()), f"tmux pane {d}"
+        n = number(d)
+        if n is not None:
+            return tmux("select-pane", "-t", tmux_target(f":.{n}")), f"tmux pane {n}"
+
+    m = re.fullmatch(rf"{GO}{WS} (\S+)", t)
+    if m:
+        n = number(m.group(1))
+        ws = ["number", str(n)] if n is not None else [m.group(1)]
+        return ["swaymsg", "workspace", *ws], f"workspace {' '.join(ws)}"
+    m = re.fullmatch(rf"(?:move|send) (?:this )?(?:to )?{WS} (\S+)", t)
+    if m:
+        n = number(m.group(1))
+        ws = ["number", str(n)] if n is not None else [m.group(1)]
+        return ["swaymsg", "move", "container", "to", "workspace", *ws], f"move to workspace {' '.join(ws)}"
+    m = re.fullmatch(rf"(?:focus |go )?{OUT} ({DIRS})", t)
+    if m:
+        return ["swaymsg", "focus", "output", m.group(1)], f"screen {m.group(1)}"
+    m = re.fullmatch(rf"(?:move|send) (?:this )?(?:to )?{OUT} ({DIRS})", t)
+    if m:
+        return ["swaymsg", "move", "container", "to", "output", m.group(1)], f"move to screen {m.group(1)}"
+    m = re.fullmatch(rf"focus ({DIRS})", t)
+    if m:
+        return ["swaymsg", "focus", m.group(1)], f"focus {m.group(1)}"
+    m = re.fullmatch(rf"move ({DIRS})", t)
+    if m:
+        return ["swaymsg", "move", m.group(1)], f"move {m.group(1)}"
+    if re.fullmatch(r"(?:toggle )?full ?screen", t):
+        return ["swaymsg", "fullscreen", "toggle"], "fullscreen"
+    if re.fullmatch(r"(?:toggle )?float(?:ing)?", t):
+        return ["swaymsg", "floating", "toggle"], "floating"
+    if re.fullmatch(r"(?:kill|close) (?:windows?|this)", t):
+        return ["swaymsg", "kill"], "close window"
+    m = re.fullmatch(r"split (horizontal|vertical)", t)
+    if m:
+        return ["swaymsg", "split", m.group(1)[0]], f"split {m.group(1)}"
+    m = re.fullmatch(r"layout (tabbed|stacking|toggle split)", t)
+    if m:
+        return ["swaymsg", "layout", *m.group(1).split()], f"layout {m.group(1)}"
+    return None
+
+
+def run_text(text, ctx, dry=False):
+    """Parse and run. Returns (ok, message)."""
+    parsed = parse(text, ctx)
+    if not parsed:
+        return False, f"didn't understand: {text.strip()!r}"
+    argv, desc = parsed
+    if dry:
+        return True, f"{desc}  →  {shlex.join(argv)}"
+    r = sh(*argv)
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout).strip().splitlines()
+        return False, f"{desc}: {err[-1] if err else 'failed'}"
+    return True, desc
+
+
+def notify(msg, ok=True):
+    sh("notify-send", "-a", "voice-cmd", "-t", "2500",
+       "voice-cmd" if ok else "voice-cmd: error", msg)
+
+
+# ----------------------------------------------------------------------------
+# overlay
+
+def overlay(ctx):
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("GtkLayerShell", "0.1")
+    from gi.repository import Gtk, GtkLayerShell, GLib, Gdk
+
+    css = b"""
+    window { background: transparent; }
+    .box { background: rgba(30,30,36,0.95); border: 1px solid #5a5f73;
+           border-radius: 10px; padding: 12px 18px; }
+    .status { color: #9aa0b4; font-size: 12px; }
+    entry { background: transparent; border: none; color: #e6e6ea;
+            font-size: 20px; min-width: 520px; }
+    .ok { color: #8fd18f; } .err { color: #e08a8a; }
+    """
+    provider = Gtk.CssProvider()
+    provider.load_from_data(css)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    win = Gtk.Window(title="voice-cmd")
+    GtkLayerShell.init_for_window(win)
+    GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
+    GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.TOP, True)
+    GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, 160)
+    GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.EXCLUSIVE)
+
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    box.get_style_context().add_class("box")
+    status = Gtk.Label(label="listening…  (hold F10, speak, release)", xalign=0)
+    status.get_style_context().add_class("status")
+    entry = Gtk.Entry()
+    box.pack_start(status, False, False, 0)
+    box.pack_start(entry, False, False, 0)
+    win.add(box)
+
+    state = {"idle_id": None, "done": False}
+
+    def finish(ok, msg):
+        if state["done"]:
+            return
+        state["done"] = True
+        status.set_text(("✔ " if ok else "✘ ") + msg)
+        status.get_style_context().add_class("ok" if ok else "err")
+        if not ok:
+            notify(msg, ok=False)
+        GLib.timeout_add(SHOW_RESULT_MS if ok else 1500, Gtk.main_quit)
+
+    def submit():
+        state["idle_id"] = None
+        text = entry.get_text()
+        if not text.strip():
+            return False
+        entry.set_editable(False)
+        status.set_text("running…")
+        ok, msg = run_text(text, ctx)
+        finish(ok, msg)
+        return False
+
+    def on_changed(_entry):
+        if state["done"]:
+            return
+        if state["idle_id"]:
+            GLib.source_remove(state["idle_id"])
+        state["idle_id"] = GLib.timeout_add(IDLE_MS, submit)
+        status.set_text("…")
+
+    def on_key(_w, event):
+        if event.keyval == Gdk.KEY_Escape:
+            Gtk.main_quit()
+            return True
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            if state["idle_id"]:
+                GLib.source_remove(state["idle_id"])
+            submit()
+            return True
+        return False
+
+    def on_released(*_):
+        if not state["done"] and not entry.get_text():
+            status.set_text("transcribing…")
+        return True
+
+    def give_up():
+        if not state["done"] and not entry.get_text():
+            Gtk.main_quit()
+        return False
+
+    entry.connect("changed", on_changed)
+    win.connect("key-press-event", on_key)
+    win.connect("destroy", Gtk.main_quit)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, on_released)
+    GLib.timeout_add_seconds(WAIT_FOR_TEXT_S, give_up)
+
+    win.show_all()
+    entry.grab_focus()
+    Gtk.main()
+
+
+# ----------------------------------------------------------------------------
+
+def running_pid():
+    try:
+        with open(PIDFILE) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def main(argv):
+    if argv[:1] == ["--released"]:
+        pid = running_pid()
+        if pid:
+            os.kill(pid, signal.SIGUSR1)
+        return 0
+
+    if argv[:1] in (["--run"], ["--dry-run"]):
+        text = " ".join(argv[1:]) or sys.stdin.read()
+        wpid = focused_window_pid()
+        ctx = {"session": tmux_session_for(wpid)}
+        ok, msg = run_text(text, ctx, dry=argv[0] == "--dry-run")
+        print(msg)
+        return 0 if ok else 1
+
+    if running_pid():
+        return 0  # an overlay is already up; F10 auto-repeat or a double press
+
+    # Work out the target BEFORE the overlay takes keyboard focus.
+    wpid = focused_window_pid()
+    ctx = {"session": tmux_session_for(wpid)}
+
+    with open(PIDFILE, "w") as f:
+        f.write(str(os.getpid()))
+    try:
+        overlay(ctx)
+    finally:
+        try:
+            os.unlink(PIDFILE)
+        except OSError:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

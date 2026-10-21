@@ -307,6 +307,13 @@ bindsym Shift+Alt+Control+Print exec grim -o $(swaymsg -t get_outputs | jq -r '.
 # lock on Alt+Control+Delete
 bindsym Alt+Control+Delete exec swaylock -f -c 000000
 
+# Voice command mode (~/scripts/voice-cmd): hold F10 and speak a Sway/tmux
+# command. F10 is also Wispr Flow's push-to-talk key, so Wispr records while
+# it is held and pastes the transcript into the voice-cmd overlay on release;
+# the overlay runs the command. Sway owns F10, so apps never see it.
+bindsym --no-repeat F10 exec /home/brandon/scripts/voice-cmd
+bindsym --release F10 exec /home/brandon/scripts/voice-cmd --released
+
 for_window [app_id="Xpra"] floating enable
 
 exec --no-startup-id nm-applet
