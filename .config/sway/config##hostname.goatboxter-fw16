@@ -315,18 +315,21 @@ bindsym --no-repeat F10 exec /home/brandon/scripts/voice-cmd
 bindsym --release F10 exec /home/brandon/scripts/voice-cmd --released
 
 # F13..F24 jump straight to workspaces 1..12 (keys sent by the Cipulot 4704).
-bindsym F13 workspace number 1
-bindsym F14 workspace number 2
-bindsym F15 workspace number 3
-bindsym F16 workspace number 4
-bindsym F17 workspace number 5
-bindsym F18 workspace number 6
-bindsym F19 workspace number 7
-bindsym F20 workspace number 8
-bindsym F21 workspace number 9
-bindsym F22 workspace number 10
-bindsym F23 workspace number 11
-bindsym F24 workspace number 12
+# Bound by keycode: the default XKB keymap gives these keys keysyms like
+# XF86Tools/XF86Launch5, not F13..F24, so `bindsym F13` never fires.
+# xkb keycode = evdev KEY_F13 (183) + 8 = 191 ... KEY_F24 (194) + 8 = 202.
+bindcode 191 workspace number 1
+bindcode 192 workspace number 2
+bindcode 193 workspace number 3
+bindcode 194 workspace number 4
+bindcode 195 workspace number 5
+bindcode 196 workspace number 6
+bindcode 197 workspace number 7
+bindcode 198 workspace number 8
+bindcode 199 workspace number 9
+bindcode 200 workspace number 10
+bindcode 201 workspace number 11
+bindcode 202 workspace number 12
 
 for_window [app_id="Xpra"] floating enable
 
