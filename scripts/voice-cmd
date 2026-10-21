@@ -258,105 +258,19 @@ def notify(msg, ok=True):
 
 
 # ----------------------------------------------------------------------------
-# overlay
+# overlay (shared with `ask`, see voice_overlay.py)
 
 def overlay(ctx):
-    import gi
-    gi.require_version("Gtk", "3.0")
-    gi.require_version("GtkLayerShell", "0.1")
-    from gi.repository import Gtk, GtkLayerShell, GLib, Gdk
+    from voice_overlay import capture
 
-    css = b"""
-    window { background: transparent; }
-    .box { background: rgba(30,30,36,0.95); border: 1px solid #5a5f73;
-           border-radius: 10px; padding: 12px 18px; }
-    .status { color: #9aa0b4; font-size: 12px; }
-    entry { background: transparent; border: none; color: #e6e6ea;
-            font-size: 20px; min-width: 520px; }
-    .ok { color: #8fd18f; } .err { color: #e08a8a; }
-    """
-    provider = Gtk.CssProvider()
-    provider.load_from_data(css)
-    Gtk.StyleContext.add_provider_for_screen(
-        Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-
-    win = Gtk.Window(title="voice-cmd")
-    GtkLayerShell.init_for_window(win)
-    GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
-    GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.TOP, True)
-    GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, 160)
-    GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.EXCLUSIVE)
-
-    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-    box.get_style_context().add_class("box")
-    status = Gtk.Label(label="listening…  (hold F10, speak, release)", xalign=0)
-    status.get_style_context().add_class("status")
-    entry = Gtk.Entry()
-    box.pack_start(status, False, False, 0)
-    box.pack_start(entry, False, False, 0)
-    win.add(box)
-
-    state = {"idle_id": None, "done": False}
-
-    def finish(ok, msg):
-        if state["done"]:
-            return
-        state["done"] = True
-        status.set_text(("✔ " if ok else "✘ ") + msg)
-        status.get_style_context().add_class("ok" if ok else "err")
+    def submit(text):
+        ok, msg = run_text(text, ctx)
         if not ok:
             notify(msg, ok=False)
-        GLib.timeout_add(SHOW_RESULT_MS if ok else 1500, Gtk.main_quit)
+        return ok, msg
 
-    def submit():
-        state["idle_id"] = None
-        text = entry.get_text()
-        if not text.strip():
-            return False
-        entry.set_editable(False)
-        status.set_text("running…")
-        ok, msg = run_text(text, ctx)
-        finish(ok, msg)
-        return False
-
-    def on_changed(_entry):
-        if state["done"]:
-            return
-        if state["idle_id"]:
-            GLib.source_remove(state["idle_id"])
-        state["idle_id"] = GLib.timeout_add(IDLE_MS, submit)
-        status.set_text("…")
-
-    def on_key(_w, event):
-        if event.keyval == Gdk.KEY_Escape:
-            Gtk.main_quit()
-            return True
-        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
-            if state["idle_id"]:
-                GLib.source_remove(state["idle_id"])
-            submit()
-            return True
-        return False
-
-    def on_released(*_):
-        if not state["done"] and not entry.get_text():
-            status.set_text("transcribing…")
-        return True
-
-    def give_up():
-        if not state["done"] and not entry.get_text():
-            finish(False, f"nothing arrived from Wispr Flow in {WAIT_FOR_TEXT_S} s")
-        return False
-
-    entry.connect("changed", on_changed)
-    win.connect("key-press-event", on_key)
-    win.connect("destroy", Gtk.main_quit)
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, on_released)
-    GLib.timeout_add_seconds(WAIT_FOR_TEXT_S, give_up)
-
-    win.show_all()
-    entry.grab_focus()
-    Gtk.main()
+    capture(status="listening…  (hold F10, speak, release)", idle_ms=IDLE_MS,
+            wait_s=WAIT_FOR_TEXT_S, show_result_ms=SHOW_RESULT_MS, submit=submit)
 
 
 # ----------------------------------------------------------------------------

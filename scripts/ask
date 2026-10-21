@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""ask — talk to Claude about what's on screen and hear the answer.
+
+    ask [-s] [-n] TEXT...     typed question (for testing); -s attaches a screenshot
+                              of the focused window, -n starts a new conversation
+    ask --listen [-s]         hold-key mode: overlay catches Wispr Flow's transcript
+    ask --released            key-release handler for the overlay (status only)
+    ask --stop                stop speaking
+    ask --new                 forget the conversation
+    ask --say TEXT...         just speak TEXT (TTS test)
+
+Sway (F4 = ask about the screen, F5 = follow-up, F6 = stop, F7 = new):
+    bindsym --no-repeat F4 exec ~/scripts/ask --listen --screenshot
+    bindsym --release   F4 exec ~/scripts/ask --released
+    bindsym --no-repeat F5 exec ~/scripts/ask --listen
+    bindsym --release   F5 exec ~/scripts/ask --released
+    bindsym F6 exec ~/scripts/ask --stop
+    bindsym F7 exec ~/scripts/ask --new
+F4 and F5 are also Wispr Flow push-to-talk keys, so Wispr records while they are
+held and pastes the transcript into the overlay on release.
+
+Backend: `claude -p` (Claude Code, the subscription) with a saved session id so
+follow-ups continue the same conversation; the screenshot is read by Claude's
+Read tool. Voice: Piper (venv in ~/.local/share/piper-venv), streamed to aplay
+sentence by sentence. A transcript is appended to ~/.local/state/ask/log.md.
+"""
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+import uuid
+
+RUNTIME = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+STATE = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "ask")
+CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "ask")
+SESSION_FILE = os.path.join(STATE, "session")
+LOG_FILE = os.path.join(STATE, "log.md")
+OVERLAY_PID = os.path.join(RUNTIME, "ask-overlay.pid")
+SPEAK_PID = os.path.join(RUNTIME, "ask-speak.pid")
+
+PIPER = os.path.expanduser("~/.local/share/piper-venv/bin/piper")
+VOICE = os.path.expanduser("~/.local/share/piper-voices/en_US-lessac-medium.onnx")
+VOICE_RATE = 22050
+CLAUDE_TIMEOUT = 180
+MODEL = os.environ.get("ASK_MODEL")  # None = Claude Code's default
+
+SYSTEM_PROMPT = (
+    "You are a voice assistant. The user speaks to you and hears your reply read "
+    "aloud by text-to-speech, so answer in plain conversational prose: no markdown, "
+    "no bullet points, no headings, no code, no URLs. Keep replies to two to four "
+    "sentences unless the user asks for detail. When the message names a screenshot "
+    "file, read it with the Read tool; it shows what the user is looking at right now. "
+    "Do not describe the screenshot unless asked; use it as context for the question."
+)
+
+
+# ----------------------------------------------------------------------------
+
+def sh(*argv, **kw):
+    return subprocess.run(argv, capture_output=True, text=True, **kw)
+
+
+def notify(msg, urgent=False, ms=2500):
+    sh("notify-send", "-a", "ask", "-t", str(ms), *(["-u", "critical"] if urgent else []), "ask", msg)
+
+
+def read_pid(path):
+    try:
+        with open(path) as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError):
+        return None
+
+
+def focused_rect():
+    """Geometry of the focused Sway container as 'x,y wxh', or None."""
+    try:
+        tree = json.loads(sh("swaymsg", "-t", "get_tree").stdout)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    def walk(node):
+        if node.get("focused") and node.get("type") in ("con", "floating_con"):
+            r = node["rect"]
+            return f"{r['x']},{r['y']} {r['width']}x{r['height']}"
+        for child in node.get("nodes", []) + node.get("floating_nodes", []):
+            found = walk(child)
+            if found:
+                return found
+        return None
+
+    return walk(tree)
+
+
+def screenshot():
+    os.makedirs(CACHE, exist_ok=True)
+    path = os.path.join(CACHE, time.strftime("shot-%Y%m%d-%H%M%S.png"))
+    rect = focused_rect()
+    argv = ["grim"] + (["-g", rect] if rect else []) + [path]
+    r = sh(*argv)
+    if r.returncode != 0:
+        notify("screenshot failed: " + (r.stderr.strip() or "grim error"), urgent=True)
+        return None
+    # keep the last few
+    shots = sorted(f for f in os.listdir(CACHE) if f.startswith("shot-"))
+    for old in shots[:-5]:
+        os.unlink(os.path.join(CACHE, old))
+    return path
+
+
+# ----------------------------------------------------------------------------
+# speech
+
+def stop_speaking():
+    pgid = read_pid(SPEAK_PID)
+    if pgid:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except OSError:
+            pass
+    try:
+        os.unlink(SPEAK_PID)
+    except OSError:
+        pass
+
+
+def clean_for_tts(text):
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"[`*_#>]+", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)   # [label](url) -> label
+    text = re.sub(r"https?://\S+", "a link", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    return text.strip()
+
+
+def speak(text, wait=True):
+    """Stream text through Piper into aplay. Returns the player process."""
+    stop_speaking()
+    text = clean_for_tts(text)
+    if not text:
+        return None
+    cmd = (f"exec {PIPER} -m {VOICE} --output-raw 2>/dev/null"
+           f" | aplay -q -r {VOICE_RATE} -f S16_LE -c 1 -t raw -")
+    proc = subprocess.Popen(["sh", "-c", cmd], stdin=subprocess.PIPE,
+                            start_new_session=True)
+    with open(SPEAK_PID, "w") as f:
+        f.write(str(proc.pid))  # pid == pgid thanks to start_new_session
+    try:
+        proc.stdin.write(text.encode())
+        proc.stdin.close()
+    except BrokenPipeError:
+        pass
+    if wait:
+        proc.wait()
+        try:
+            os.unlink(SPEAK_PID)
+        except OSError:
+            pass
+    return proc
+
+
+# ----------------------------------------------------------------------------
+# Claude
+
+def session_id(new=False):
+    os.makedirs(STATE, exist_ok=True)
+    if not new:
+        try:
+            with open(SESSION_FILE) as f:
+                sid = f.read().strip()
+            if sid:
+                return sid, True
+        except OSError:
+            pass
+    sid = str(uuid.uuid4())
+    with open(SESSION_FILE, "w") as f:
+        f.write(sid)
+    return sid, False
+
+
+def ask_claude(prompt, new=False):
+    """Returns (ok, reply)."""
+    env = dict(os.environ)
+    for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
+        env.pop(k, None)
+    os.makedirs(CACHE, exist_ok=True)
+
+    def run(sid, resume):
+        argv = ["claude", "-p", "--output-format", "text", "--allowedTools", "Read",
+                "--append-system-prompt", SYSTEM_PROMPT]
+        argv += ["--resume", sid] if resume else ["--session-id", sid]
+        if MODEL:
+            argv += ["--model", MODEL]
+        argv.append(prompt)
+        try:
+            return subprocess.run(argv, capture_output=True, text=True, env=env,
+                                  cwd=CACHE, timeout=CLAUDE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return None
+
+    sid, resume = session_id(new)
+    r = run(sid, resume)
+    if r is not None and r.returncode != 0 and resume:
+        # the saved session is gone (cleaned up, different machine...): start over
+        sid, _ = session_id(new=True)
+        r = run(sid, False)
+    if r is None:
+        return False, "Claude didn't answer in time."
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout).strip().splitlines()
+        return False, "Claude failed: " + (err[-1] if err else f"exit {r.returncode}")
+    return True, r.stdout.strip()
+
+
+def log(question, answer, shot):
+    os.makedirs(STATE, exist_ok=True)
+    with open(LOG_FILE, "a") as f:
+        f.write(f"\n## {time.strftime('%Y-%m-%d %H:%M')}" + (f"  ({os.path.basename(shot)})" if shot else "") + "\n")
+        f.write(f"**Q:** {question.strip()}\n\n{answer.strip()}\n")
+
+
+def converse(question, shot=None, new=False, say=True):
+    prompt = question.strip()
+    if shot:
+        prompt = f"Screenshot of what I'm looking at: {shot}\n\n{prompt}"
+    notify("thinking…", ms=15000)
+    ok, reply = ask_claude(prompt, new=new)
+    sh("makoctl", "dismiss")  # drop the "thinking…" toast if mako is the daemon
+    if not ok:
+        notify(reply, urgent=True)
+        if say:
+            speak("Sorry, that didn't work. " + reply)
+        return 1
+    log(question, reply, shot)
+    if say:
+        speak(reply)
+    else:
+        print(reply)
+    return 0
+
+
+# ----------------------------------------------------------------------------
+
+def main(argv):
+    args = list(argv)
+    flags = {a for a in args if a.startswith("-")}
+    words = [a for a in args if not a.startswith("-")]
+    with_shot = bool(flags & {"-s", "--screenshot"})
+    new = bool(flags & {"-n", "--new"})
+
+    if "--released" in flags:
+        pid = read_pid(OVERLAY_PID)
+        if pid:
+            os.kill(pid, signal.SIGUSR1)
+        return 0
+    if "--stop" in flags:
+        stop_speaking()
+        return 0
+    if "--say" in flags:
+        speak(" ".join(words))
+        return 0
+    if "--new" in flags and not words and "--listen" not in flags:
+        session_id(new=True)
+        stop_speaking()
+        notify("new conversation")
+        return 0
+
+    if "--listen" in flags:
+        if read_pid(OVERLAY_PID):
+            return 0  # already listening (key auto-repeat / double press)
+        stop_speaking()                      # a new question interrupts the answer
+        shot = screenshot() if with_shot else None   # BEFORE the overlay takes focus
+        from voice_overlay import capture
+        with open(OVERLAY_PID, "w") as f:
+            f.write(str(os.getpid()))
+        try:
+            text, ok, _ = capture(status="listening…  (hold F4/F5, speak, release)",
+                                  submit=lambda t: (True, "asking Claude…"))
+        finally:
+            try:
+                os.unlink(OVERLAY_PID)
+            except OSError:
+                pass
+        if not text:
+            return 0
+        return converse(text, shot=shot, new=new)
+
+    if not words:
+        print(__doc__)
+        return 2
+    shot = screenshot() if with_shot else None
+    return converse(" ".join(words), shot=shot, new=new, say="--no-speak" not in flags)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
