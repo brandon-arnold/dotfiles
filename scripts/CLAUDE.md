@@ -29,7 +29,7 @@ are the ones system work here normally lands in:
 | `02_areas/infrastructure/README.md`            | machine roster, standing rules, known-broken            |
 | `02_areas/infrastructure/workstation.md`       | goatboxter-fw16 itself                                  |
 | `02_areas/infrastructure/fw16-gpu-migration.md`| the 2025-12-07 Radeon RX 7700S → RTX 5070 swap          |
-| `02_areas/infrastructure/hibernate-resume-fw16.md` | hibernate/resume, BROKEN, NVIDIA VRAM + WiFi-on-resume |
+| `02_areas/infrastructure/issues/hibernate-resume-fw16.md` | hibernate/resume, resolved by hiding the TPM in the BIOS |
 | `02_areas/infrastructure/backups.md`           | the backup story `backup` / `system-backup` implement   |
 | `02_areas/infrastructure/networking.md`        | nftables, iwd/NM, .bant hosts                           |
 | `03_resources/tools/scripts-inventory.md`      | what the scripts in this directory are                  |
