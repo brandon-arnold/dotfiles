@@ -342,6 +342,10 @@ bindcode 201 workspace number 11
 bindcode 202 workspace number 12
 
 for_window [app_id="Xpra"] floating enable
+# Wispr Flow's indicator ("Status" window) is a floating window that would
+# otherwise live on whichever workspace it opened on. sticky = visible on every
+# workspace of its output. To hide it instead, use Wispr's own "hide Flow bar".
+for_window [app_id="wispr-flow" title="Status"] sticky enable
 
 exec --no-startup-id nm-applet
 exec --no-startup-id libinput-gestures

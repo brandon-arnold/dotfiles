@@ -26,12 +26,20 @@ window { background: transparent; }
 entry { background: transparent; border: none; color: #e6e6ea;
         font-size: 20px; min-width: 520px; }
 .ok { color: #8fd18f; } .err { color: #e08a8a; }
+.invisible, .invisible * { opacity: 0; background: transparent; border: none;
+                           box-shadow: none; min-width: 1px; min-height: 1px; }
 """
 
 
 def capture(status="listening…  (hold the key, speak, release)", idle_ms=700,
-            wait_s=20, show_result_ms=500, error_ms=1500, submit=None, top_margin=160):
-    """Show the overlay and return (text, ok, msg). text is None on cancel/timeout."""
+            wait_s=20, show_result_ms=500, error_ms=1500, submit=None, top_margin=160,
+            invisible=False):
+    """Show the overlay and return (text, ok, msg). text is None on cancel/timeout.
+
+    invisible=True draws nothing at all: the surface still exists (it has to, to
+    hold keyboard focus), but it is fully transparent and closes the moment the
+    text has been handed to `submit`.
+    """
     provider = Gtk.CssProvider()
     provider.load_from_data(CSS)
     Gtk.StyleContext.add_provider_for_screen(
@@ -52,6 +60,12 @@ def capture(status="listening…  (hold the key, speak, release)", idle_ms=700,
     box.pack_start(label, False, False, 0)
     box.pack_start(entry, False, False, 0)
     win.add(box)
+    if invisible:
+        win.get_style_context().add_class("invisible")
+        box.get_style_context().add_class("invisible")
+        win.set_opacity(0.0)
+        win.set_default_size(1, 1)
+        show_result_ms = error_ms = 1
 
     result = {"text": None, "ok": False, "msg": "cancelled"}
     state = {"idle_id": None, "done": False}

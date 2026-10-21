@@ -279,14 +279,15 @@ def main(argv):
         with open(OVERLAY_PID, "w") as f:
             f.write(str(os.getpid()))
         try:
-            text, ok, _ = capture(status="listening…  (hold F5/F6, speak, release)",
-                                  submit=lambda t: (True, "asking Claude…"))
+            text, ok, msg = capture(invisible=True, submit=lambda t: (True, "ok"))
         finally:
             try:
                 os.unlink(OVERLAY_PID)
             except OSError:
                 pass
         if not text:
+            if not ok and "nothing arrived" in msg:
+                notify(msg, urgent=True)
             return 0
         return converse(text, shot=shot, new=new)
 
