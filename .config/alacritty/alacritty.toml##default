@@ -40,3 +40,11 @@ history = 10000
 [window]
 decorations = "none"
 opacity = 0.85
+
+# Wispr Flow "types" by putting the transcript on the clipboard and sending Ctrl+V.
+# Let the terminal do that paste so it reaches remote sessions (et/ssh) too.
+# Costs: terminal apps no longer see a raw ^V (emacs -nw page-down, vim block mode).
+[[keyboard.bindings]]
+key = "V"
+mods = "Control"
+action = "Paste"
