@@ -46,9 +46,13 @@ include ~/.config/sway/outputs
 #               resume 'swaymsg "output * dpms on"' \
 #          before-sleep 'swaylock -f -c 000000'
          
-exec swayidle -w \
-         timeout 600 'swaymsg "output * dpms off"' \
-              resume 'swaymsg "output * dpms on"'
+# Idle screen power-off disabled: through the Anker dock + Level1Techs KVM,
+# the dpms off/on cycle tears down and restarts both Dell streams and the KVM
+# masks hotplug, so a Dell often fails to re-sync and stays black while Sway
+# reports it on. Use `kvm-return monitors` if that happens anyway.
+# exec swayidle -w \
+#          timeout 600 'swaymsg "output * dpms off"' \
+#               resume 'swaymsg "output * dpms on"'
 
 # exec swayidle -w timeout 600 '/usr/bin/systemctl suspend'
 
@@ -269,11 +273,11 @@ input 20547:23623:Ploopy_Corporation_Ploopy_Adept_Trackball_Mouse {
 }
 
 input 1149:33128:Expert_Mouse_TB800_EQ_Wired_Expert_Mouse_TB800_EQ_Wired_Keyboard {
-      pointer_accel -0.5
+      pointer_accel -0.7
 }
 
 input 1149:33128:Expert_Mouse_TB800_EQ_Wired_Expert_Mouse_TB800_EQ_Wired {
-      pointer_accel -0.5
+      pointer_accel -0.7
 }
 
 # Elecom HUGE PLUS trackball -- 2.4GHz dongle (056e:01ab). The wired unit

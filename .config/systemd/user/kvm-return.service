@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart Wispr Flow after the KVM switches back
+
+[Service]
+Type=oneshot
+ExecStart=%h/scripts/kvm-return

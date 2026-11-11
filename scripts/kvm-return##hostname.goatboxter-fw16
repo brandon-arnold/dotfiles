@@ -1,0 +1,56 @@
+#!/bin/bash
+# Heal the desk after the KVM switches back to this machine.
+#
+#   kvm-return            restart Wispr Flow (what kvm-return.service runs)
+#   kvm-return monitors   re-modeset the two Dells (manual, see below)
+#   kvm-return left|right re-modeset only that Dell
+#
+# Triggered by the KVM's USB hub (Realtek RTS5411, 0bda:5411) appearing, via
+# udev -> kvm-return.service.
+#
+# Wispr Flow: its helper opens the evdev nodes once at start, and the keyboard
+# behind the KVM re-enumerates on every switch, so Wispr goes deaf to it
+# (F9 / F10 dead). Restarting Wispr makes it re-scan. Deterministic.
+#
+# Monitors: the KVM hides the monitors' hotplug from the Anker dock, so the
+# dock's DisplayPort MST streams keep running and a Dell that does not lock
+# onto its stream stays dark while Linux believes it is on. A disable/enable
+# in Sway starts a fresh stream, which the monitor may or may not lock onto:
+# it fixed a dark monitor on 2026-10-26 and knocked a working one out on
+# 2026-11-03. So it is NOT run automatically; use it on the dark side only.
+export SWAYSOCK=${SWAYSOCK:-$(ls /run/user/$(id -u)/sway-ipc.*.sock 2>/dev/null | head -1)}
+[ -S "$SWAYSOCK" ] || exit 0
+
+# The Dells' connector names (DP-N) change between docks; find them by serial.
+left_serial="#GTIYMxgwABVe"    # position 0,0
+right_serial="#GjMYMxgwAAMb"   # position 2560,0
+name_for() {
+  swaymsg -t get_outputs | python3 -c '
+import json, sys
+for o in json.load(sys.stdin):
+    if o.get("serial") == sys.argv[1]:
+        print(o["name"])' "$1"
+}
+cycle() {
+  local names=("$@")
+  [ ${#names[@]} -gt 0 ] || return 0
+  for n in "${names[@]}"; do swaymsg "output $n disable" >/dev/null; done
+  sleep 2
+  for n in "${names[@]}"; do swaymsg "output $n enable" >/dev/null; done
+}
+
+case "${1:-wispr}" in
+  wispr)
+    sleep "${KVM_RETURN_DELAY:-3}"
+    if pgrep -x wispr-flow >/dev/null; then
+      pkill -x wispr-flow
+      sleep 2
+      # Launch through Sway so it gets the session environment, as at login.
+      swaymsg exec wispr-flow >/dev/null
+    fi
+    ;;
+  monitors) cycle $(name_for "$left_serial") $(name_for "$right_serial") ;;
+  left)     cycle $(name_for "$left_serial") ;;
+  right)    cycle $(name_for "$right_serial") ;;
+  *) echo "usage: kvm-return [wispr|monitors|left|right]" >&2; exit 2 ;;
+esac
