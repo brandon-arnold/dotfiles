@@ -5,8 +5,10 @@
 # Both Dells hang off one DP link through the dock; Sway rejects anything above
 # 60 Hz on either of them (tested 100/120/144 on 2026-10-21), so pin 60 Hz.
 
+# Laptop panel pinned to 60 Hz on its own to save battery (about 1 W against
+# 165 Hz). For a game: swaymsg output eDP-1 mode 2560x1600@165Hz
 profile mobile {
-        output "BOE NE160QDM-NZ6 Unknown" enable scale 1.3
+        output "BOE NE160QDM-NZ6 Unknown" enable mode 2560x1600@60Hz scale 1.3
 }
 
 # Docked: both Dell AW2721D monitors, laptop panel off.

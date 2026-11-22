@@ -46,13 +46,14 @@ include ~/.config/sway/outputs
 #               resume 'swaymsg "output * dpms on"' \
 #          before-sleep 'swaylock -f -c 000000'
          
-# Idle screen power-off disabled: through the Anker dock + Level1Techs KVM,
-# the dpms off/on cycle tears down and restarts both Dell streams and the KVM
+# Idle screen power-off, laptop panel only. Through the Anker dock + Level1Techs
+# KVM, a dpms off/on cycle tears down and restarts both Dell streams and the KVM
 # masks hotplug, so a Dell often fails to re-sync and stays black while Sway
-# reports it on. Use `kvm-return monitors` if that happens anyway.
-# exec swayidle -w \
-#          timeout 600 'swaymsg "output * dpms off"' \
-#               resume 'swaymsg "output * dpms on"'
+# reports it on. The Dells are therefore left alone here; use `kvm-return
+# monitors` if one goes dark anyway.
+exec swayidle -w \
+         timeout 600 'swaymsg "output eDP-1 dpms off"' \
+              resume 'swaymsg "output eDP-1 dpms on"'
 
 # exec swayidle -w timeout 600 '/usr/bin/systemctl suspend'
 
@@ -346,12 +347,12 @@ bindcode 201 workspace number 11
 bindcode 202 workspace number 12
 
 for_window [app_id="Xpra"] floating enable
-# Wispr Flow's indicator ("Status" window) is a floating window that would
-# otherwise live on whichever workspace it opened on. sticky = visible on every
-# workspace of its output. To hide it instead, use Wispr's own "hide Flow bar".
-# Wispr Flow's status pill lives in a 512x614 fully transparent window that swallows pointer
-# events over its whole rect; shrink it to the pill and park it at the bottom centre.
-for_window [app_id="wispr-flow" title="Status"] sticky enable, resize set 200 px 50 px, move position 45 ppt 95 ppt
+# Wispr Flow's status pill lives in a 512x614 mostly transparent, non-resizable
+# window that swallows pointer events over its whole rect. Sway can't make an
+# xdg toplevel click-through, and "resize set" is ignored by the client (it keeps
+# its 512x614 surface, which is what gets hit-tested), so hide it in the
+# scratchpad instead. Wispr's "hide Flow bar" setting does not remove this window.
+for_window [app_id="wispr-flow" title="Status"] move scratchpad
 
 exec --no-startup-id nm-applet
 exec --no-startup-id libinput-gestures

@@ -19,7 +19,6 @@
         "sway/window"
     ],
     "modules-right": [
-        "mpd",
         "idle_inhibitor",
         "pulseaudio",
         "network",
